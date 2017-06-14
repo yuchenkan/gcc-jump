@@ -3,6 +3,7 @@
 
 #include <string>
 #include <map>
+#include <list>
 #include <vector>
 
 #include "gcc-plugin.h"
@@ -38,6 +39,10 @@ class id_map
 public:
   id_map ()
     : cur (0)
+  {
+  }
+  id_map (const id_map& map)
+    : cur (map.cur), map (map.map)
   {
   }
 
@@ -211,7 +216,9 @@ struct jump_from
   bool
   operator< (const jump_from &rhs) const
   {
-    return loc < rhs.loc;
+    return loc < rhs.loc
+	   || (! (rhs.loc < loc)
+	       && expanded_id < rhs.expanded_id);
   }
 
   file_location loc;
@@ -381,7 +388,6 @@ struct unit
 {
   unit (const unit& unit)
     : args (unit.args),
-      current_macro_source_stack (unit.current_macro_source_stack),
       context_id (unit.context_id),
       contexts (unit.contexts),
       file_map (unit.file_map),
@@ -431,10 +437,9 @@ struct unit
   }
 
   std::string args;
-  source_stack current_macro_source_stack;
   int context_id;
   std::map<source_stack, context> contexts;
-  std::vector<expansion> expansions;
+  std::list<expansion> expansions;
   id_map<std::string> file_map;
   id_map<source_stack> stack_map;
 };
@@ -453,7 +458,7 @@ struct set
     return &units.back ();
   }
 
-  std::vector<unit> units;
+  std::list<unit> units;
 };
 
 struct unwind_stack
@@ -493,13 +498,13 @@ cb_start_unit (void *, void *data)
   gcj::set *set = (gcj::set *) data;
 
   std::string args;
-  for (int i = 1; i < save_decoded_options_count; ++i)
+  for (size_t i = 1; i < save_decoded_options_count; ++i)
     {
-      fprintf (stderr, "option: %d %s %s",
+      fprintf (stderr, "option: %lu %s %s",
 	       save_decoded_options[i].opt_index,
 	       save_decoded_options[i].arg,
 	       save_decoded_options[i].orig_option_with_args_text);
-      for (int j = 0; j < save_decoded_options[i].canonical_option_num_elements; ++j)
+      for (size_t j = 0; j < save_decoded_options[i].canonical_option_num_elements; ++j)
 	{
 	  fprintf (stderr, "\n  %s",
 		   save_decoded_options[i].canonical_option[j]);
@@ -536,7 +541,7 @@ unwind_include (gcj::unit *unit, source_location loc,
 
   const line_map_ordinary *m;
   linemap_resolve_location (line_table, loc,
-			    LRK_MACRO_DEFINITION_LOCATION, &m);
+			    LRK_MACRO_EXPANSION_POINT, &m);
 
   while (! MAIN_FILE_P (m))
     {
@@ -600,22 +605,24 @@ cb_cpp_token (void *arg, void  *data)
 
   source_location loc = ((cpp_token_arg *) arg)->loc;
 
-  gcj::macro_stack stack;
-  unwind_macro (unit, loc, &stack, "cpp_token");
+  gcj::unwind_stack stack;
+  unwind_macro (unit, loc, &stack.macro, "cpp_token");
 
-  if (stack.length () == 0)
+  if (stack.macro.length () == 0)
     return;
 
-  fprintf (stderr, "cpp_token at %s:%d,%d\n",
+  fprintf (stderr, "cpp_token at %u %s:%d,%d\n",
+	   loc,
 	   LOCATION_FILE (loc), LOCATION_LINE (loc), LOCATION_COLUMN (loc));
 
-  //unwind_include (unit, loc, &stack.include, "cpp_token");
+  unwind_include (unit, loc, &stack.include, "cpp_token");
 
-  gcj::context *ctx = unit->get (unit->current_macro_source_stack);
+  // TOFIX, stack.include is not accurate
+  gcj::context *ctx = unit->get (stack.include);
   gcj::jump_to *to = ctx->jump (gcj::file_location (loc), 0);
   assert (to && to->get_expansion ());
   to->get_expansion ()->add (spell ((cpp_token_arg *) arg),
-			     gcj::source_stack (stack));
+			     gcj::source_stack (stack.macro));
 }
 
 static void
@@ -708,16 +715,14 @@ cb_expand_macro (void *arg, void *data)
   assert (token->type == CPP_NAME);
   const char *name = (const char *) NODE_NAME (token->val.node.spelling);
 
-  fprintf (stderr, "enter_macro %s %s:%d,%d\n",
+  fprintf (stderr, "enter_macro %u %s %s:%d,%d\n",
+           from_loc,
 	   name,
 	   LOCATION_FILE (from_loc), LOCATION_LINE (from_loc),
 	   LOCATION_COLUMN (from_loc));
 
   gcj::unwind_stack from_stack;
   unwind (unit, from_loc, &from_stack, "macro");
-
-  if (from_stack.macro.length () == 0)
-    unit->current_macro_source_stack = from_stack.include;
 
   gcj::context *from;
   gcj::expansion_point point (from_stack.include,
