@@ -32,124 +32,465 @@ escape(const char *str, char c)
 namespace gcj
 {
 
-/*
-struct src_loc
+template <typename type>
+class id_map
 {
-  int line;
-  int col;
-};
-
-struct src_range
-{
-  src_loc start;
-  src_loc end;
-};
-
-struct location
-{
-  bool virt;
-  union
+public:
+  id_map ()
+    : cur (0)
   {
-    src_range range;
-    int vid;
-  } u;
+  }
+
+  int
+  get (const type& key)
+  {
+    if (map.find (key) == map.end ())
+      map.insert (std::make_pair (key, ++cur));
+    return map.find (key)->second;
+  }
+
+private:
+  int cur;
+  std::map<type, int> map;
 };
 
-struct virt_token
-{
-  int virt_id;
-  std::string spell;
-};
+struct unit;
 
-struct jumptgt
+struct file_location
 {
-  int ctx_id;
-  src_loc loc;
-  std::vector<virt_token> expanded_tokens;
-};
+  file_location ()
+    : line (0), col (0)
+  {
+  }
 
-struct ctx_desc
-{
-  std::string file;
+  file_location (const file_location& loc)
+    : line (loc.line), col (loc.col)
+  {
+  }
+
+  file_location (int l, int c)
+    : line (l), col (c)
+  {
+  }
+
+  file_location (::source_location l);
+
+  bool
+  operator< (const file_location& rhs) const
+  {
+    return line < rhs.line
+	   || (! (rhs.line < line) && col < rhs.col);
+  }
+
+  bool
+  operator!= (const file_location &rhs) const
+  {
+    return line != rhs.line || col != rhs.col;
+  }
+
   int line;
   int col;
 };
-
-struct jumpctx
-{
-  jumpctx ()
-    : next_virt_id (0)
-  { }
-
-  int next_desc_id;
-  int next_virt_id;
-
-  std::string file;
-
-  std::map<ctx_desc, int> ctx_desc_id;
-  std::map<std::vector<int>, int> virt_id_map;
-  std::map<location, jumptgt> jumps;
-
-  int surronding_ctx_id;
-};
-*/
 
 struct source_location
 {
-  int fid;
-  int line;
-  int col;
-};
-
-struct file_map
-{
-  int
-  id (const char *file)
+  source_location (const source_location& loc)
+    : fid (loc.fid), loc (loc.loc)
   {
-    return 0; // TODO
   }
+
+  source_location (unit *unit, ::source_location l);
+  source_location (unit *unit, const line_map_ordinary *m);
+
+  bool
+  operator< (const source_location& rhs) const
+  {
+    return fid < rhs.fid
+	   || (! (rhs.fid < fid) && loc < rhs.loc);
+  }
+
+  int fid;
+  file_location loc;
 };
 
-struct jumpunit
+struct macro_stack;
+
+struct source_stack
 {
-  file_map files;
+  source_stack ()
+  {
+  }
+
+  source_stack (const macro_stack& stack);
+
+  bool
+  operator< (const source_stack& rhs) const
+  {
+    return locs < rhs.locs;
+  }
+
+  void
+  add (const source_location& loc)
+  {
+    locs.push_back (loc);
+  }
+
+  std::vector<source_location> locs;
 };
 
-struct jumpset
+struct expansion_point
 {
-  void next (const char *args);
-  jumpunit *current ();
+  expansion_point (const expansion_point& point)
+    : include (point.include), loc (point.loc)
+  {
+  }
+
+  expansion_point (const source_stack& include,
+		   const source_location& loc)
+    : include (include), loc (loc)
+  {
+  }
+
+  bool
+  operator< (const expansion_point& rhs) const
+  {
+    return include < rhs.include
+	   || (! (rhs.include < include) && loc < rhs.loc);
+  }
+
+  source_stack include;
+  source_location loc;
 };
 
-struct source_location_stack
+struct macro_stack
 {
   void
-  add (source_location loc)
+  add (const expansion_point& point)
   {
-    // TODO
+    points.push_back (point);
   }
+
+  int
+  length () const
+  {
+    return points.size ();
+  }
+
+  expansion_point *
+  front ()
+  {
+    return &points.front ();
+  }
+
+  std::vector<expansion_point> points;
+};
+
+struct jump_from
+{
+  jump_from ()
+    : len (0), expanded_id (0)
+  {
+  }
+
+  jump_from (const jump_from& from)
+    : loc (from.loc), len (from.len),
+      expanded_id (from.expanded_id)
+  {
+  }
+
+  jump_from (const file_location& loc, int len)
+    : loc (loc), len (len), expanded_id (0)
+  {
+  }
+
+  jump_from (const file_location& loc, int, int expanded_id)
+    : loc (loc), len (0), expanded_id (expanded_id)
+  {
+  }
+
+  bool
+  operator< (const jump_from &rhs) const
+  {
+    return loc < rhs.loc;
+  }
+
+  file_location loc;
+  int len;
+  int expanded_id;
+};
+
+struct expanded_token
+{
+  expanded_token (const expanded_token& token)
+    : token (token.token), id (token.id)
+  {
+  }
+
+  expanded_token (const std::string& token, int id)
+    : token (token), id (id)
+  {
+  }
+
+  std::string token;
+  int id;
+};
+
+struct expansion
+{
+  expansion ()
+  {
+  }
+
+  expansion (const expansion& exp)
+    : map (exp.map), tokens (exp.tokens)
+  {
+  }
+
+  void
+  add (const std::string& token, const source_stack& stack)
+  {
+    tokens.push_back (expanded_token (token, map.get (stack)));
+  }
+
+  int
+  id (const source_stack& stack)
+  {
+    return map.get (stack);
+  }
+
+  id_map<source_stack> map;
+  std::vector<expanded_token> tokens;
+};
+
+struct context;
+
+struct jump_to
+{
+  jump_to ()
+    : ctx (NULL), expanded_id (0), exp (NULL)
+  {
+  }
+
+  jump_to (const jump_to& to)
+    : ctx (to.ctx), loc (to.loc),
+      expanded_id (to.expanded_id),
+      exp (to.exp)
+  {
+  }
+
+  jump_to (context *ctx,
+	   const file_location& loc)
+    : ctx (ctx), loc (loc),
+      expanded_id (0), exp (NULL)
+  {
+  }
+
+  jump_to (context *ctx,
+	   const file_location& loc, expansion *exp)
+    : ctx (ctx), loc (loc),
+      expanded_id (0), exp (exp)
+  {
+  }
+
+  jump_to (context *ctx,
+	   const file_location& loc, int expanded_id)
+    : ctx (ctx), loc (loc),
+      expanded_id (expanded_id), exp (NULL)
+  {
+  }
+
+  expansion *
+  get_expansion ()
+  {
+    return exp;
+  }
+
+  context *ctx;
+  file_location loc;
+  int expanded_id;
+  expansion *exp;
+};
+
+struct context
+{
+  context ()
+    : id (0), surrounding (NULL)
+  {
+  }
+
+  context (const context& ctx)
+    : id (ctx.id), jumps (ctx.jumps),
+      surrounding (ctx.surrounding),
+      expansion_contexts (ctx.expansion_contexts)
+  {
+  }
+
+  context *
+  expansion (const expansion_point& point, int *id)
+  {
+    std::pair<std::map<expansion_point, context>::iterator, bool> pair;
+    pair = expansion_contexts.insert (std::make_pair (point, context ()));
+    if (pair.second)
+      {
+        pair.first->second.id = ++*id;
+        pair.first->second.surrounding = this;
+      }
+    return &pair.first->second;
+  }
+
+  void
+  add (const jump_from& from, const jump_to& to)
+  {
+    assert (jumps.insert (std::make_pair (from, to)).second);
+  }
+
+  jump_to *
+  jump (const file_location& loc, int expanded_id)
+  {
+    jump_from from (loc, expanded_id);
+    std::map<jump_from, jump_to>::iterator it = jumps.upper_bound (from);
+    if (it == jumps.begin ())
+      goto search_surrounding;
+    --it;
+
+    if (expanded_id != 0
+        && (it->first.loc != loc || it->first.expanded_id != expanded_id))
+      goto search_surrounding;
+
+    if (it->first.loc.line != loc.line
+	|| it->first.loc.col + it->first.len <= loc.col)
+      goto search_surrounding;
+
+    return &it->second;
+
+  search_surrounding:
+    if (surrounding)
+      return surrounding->jump (loc, expanded_id);
+    else
+      return NULL;
+  }
+
+  int id;
+  std::map<jump_from, jump_to> jumps;
+  context *surrounding;
+
+  std::map<expansion_point, context> expansion_contexts;
+};
+
+struct unit
+{
+  unit (const unit& unit)
+    : args (unit.args),
+      current_macro_source_stack (unit.current_macro_source_stack),
+      context_id (unit.context_id),
+      contexts (unit.contexts),
+      file_map (unit.file_map),
+      stack_map (unit.stack_map)
+  {
+  }
+
+  unit (const std::string& args)
+    : args (args), context_id (0)
+  {
+  }
+
+  context *
+  get (const source_stack& include)
+  {
+    std::pair<std::map<source_stack, context>::iterator, bool> pair;
+    pair = contexts.insert (std::make_pair (include, context ()));
+    if (pair.second)
+      pair.first->second.id = ++context_id;
+    return &pair.first->second;
+  }
+
+  context *
+  get (const source_stack& include,
+       const expansion_point& point)
+  {
+    return get (include)->expansion (point, &context_id);
+  }
+
+  expansion *
+  get_expansion ()
+  {
+    expansions.push_back (expansion ());
+    return &expansions.back ();
+  }
+
+  int
+  fileid (const char *file)
+  {
+    return file_map.get (file);
+  }
+
+  int
+  stackid (const source_stack& stack)
+  {
+    return stack_map.get (stack);
+  }
+
+  std::string args;
+  source_stack current_macro_source_stack;
+  int context_id;
+  std::map<source_stack, context> contexts;
+  std::vector<expansion> expansions;
+  id_map<std::string> file_map;
+  id_map<source_stack> stack_map;
+};
+
+struct set
+{
+  void
+  next (const std::string& args)
+  {
+    units.push_back (unit (args));
+  }
+
+  unit *
+  current ()
+  {
+    return &units.back ();
+  }
+
+  std::vector<unit> units;
 };
 
 struct unwind_stack
 {
-  source_location_stack *
-  macro ()
-  {
-    return NULL; // TODO
-  }
-
-  source_location_stack *
-  include ()
-  {
-  }
+  macro_stack macro;
+  source_stack include;
 };
+
+file_location::file_location (::source_location l)
+  : line (LOCATION_LINE (l)), col (LOCATION_COLUMN (l))
+{
+}
+
+source_location::source_location (unit *unit, ::source_location l)
+  : fid (unit->fileid (LOCATION_FILE (l))), loc (l)
+{
+}
+
+source_location::source_location (unit *unit, const line_map_ordinary *m)
+  : fid (unit->fileid (LINEMAP_FILE (m))),
+    loc (LAST_SOURCE_LINE (m), 0)
+{
+}
+
+source_stack::source_stack (const macro_stack& stack)
+{
+  std::vector<expansion_point>::const_iterator it;
+  for (it = stack.points.begin (); it != stack.points.end (); ++it)
+    locs.push_back (it->loc);
+}
 
 }
 
 static void
 cb_start_unit (void *, void *data)
 {
-  gcj::jumpset *set = (gcj::jumpset *) data;
+  gcj::set *set = (gcj::set *) data;
 
   std::string args;
   for (int i = 1; i < save_decoded_options_count; ++i)
@@ -169,7 +510,7 @@ cb_start_unit (void *, void *data)
       fprintf (stderr, "\n");
     }
 
-  set->next (args.c_str ());
+  set->next (args);
 
   if (!flag_syntax_only)
     {
@@ -187,39 +528,30 @@ cb_start_unit (void *, void *data)
     }
 }
 
-/*
-static tree
-walk_tree_node (tree *node, int *, void *)
+static void
+unwind_include (gcj::unit *unit, source_location loc,
+		gcj::source_stack *stack, const char *prefix)
 {
-  fprintf (stderr, "walk_tree_node: %s\n",
-	   TREE_CODE (*node) >= MAX_TREE_CODES
-	   ? "<unknown>" : get_tree_code_name (TREE_CODE (*node)));
-  if (EXPR_P (*node))
-    fprintf (stderr, "expr tree_operand_length: %d location: %s,%d,%d\n",
-	     TREE_OPERAND_LENGTH (*node),
-	     LOCATION_FILE (EXPR_LOCATION (*node)),
-	     LOCATION_LINE (EXPR_LOCATION (*node)),
-	     LOCATION_COLUMN (EXPR_LOCATION (*node)));
-  else if (DECL_P (*node))
-    fprintf (stderr, "decl name: %s location %s, %d,%d\n",
-	     DECL_NAME (*node) ? IDENTIFIER_POINTER (DECL_NAME (*node)) : "<anonymous>",
-	     DECL_SOURCE_FILE (*node),
-	     DECL_SOURCE_LINE (*node),
-	     DECL_SOURCE_COLUMN (*node));
-  return NULL_TREE;
+  assert (loc > BUILTINS_LOCATION);
+
+  const line_map_ordinary *m;
+  linemap_resolve_location (line_table, loc,
+			    LRK_MACRO_DEFINITION_LOCATION, &m);
+
+  while (! MAIN_FILE_P (m))
+    {
+      m = INCLUDED_FROM (line_table, m);
+      fprintf (stderr, "  %s, included from %s:%d\n",
+	       prefix,
+	       LINEMAP_FILE (m), LAST_SOURCE_LINE (m));
+
+      stack->add (gcj::source_location (unit, m));
+    }
 }
 
 static void
-cb_pre_genericize (void *fndecl, void *)
-{
-  fprintf (stderr, "pre_genericize\n");
-  walk_tree (& DECL_SAVED_TREE ((tree)fndecl), walk_tree_node, NULL, NULL);
-}
-*/
-
-static void
-unwind_macro (gcj::jumpunit *junit, source_location loc,
-	      gcj::source_location_stack *stack, const char *prefix)
+unwind_macro (gcj::unit *unit, source_location loc,
+	      gcj::macro_stack *stack, const char *prefix)
 {
   if (loc <= BUILTINS_LOCATION)
     return;
@@ -238,107 +570,188 @@ unwind_macro (gcj::jumpunit *junit, source_location loc,
 	       prefix,
 	       LOCATION_FILE (l), LOCATION_LINE (l), LOCATION_COLUMN (l));
 
-      gcj::source_location jloc;
-      jloc.fid = junit->files.id (LOCATION_FILE (l));
-      jloc.line = LOCATION_LIEN (l);
-      jloc.col = LOCATION_COLUMN (l);
+      gcj::source_stack include;
+      unwind_include (unit, l, &include, prefix);
 
-      stack->add (jloc);
+      stack->add (gcj::expansion_point (include,
+					gcj::source_location (unit, l)));
     }
 }
 
 static void
-unwind_include (gcj::jumpunit *junit, source_location loc,
-		gcj::source_location_stack *stack, const char *prefix)
-{
-  assert (loc > BUILTINS_LOCATION);
-
-  const line_map_ordinary *m;
-  linemap_resolve_location (line_table, loc,
-			    LRK_MACRO_DEFINITION_LOCATION, &m);
-
-  while (! MAIN_FILE_P (m))
-    {
-      m = INCLUDED_FROM (line_table, m);
-      fprintf (stderr, "  %s, included from %s:%d\n",
-	       prefix,
-	       LINEMAP_FILE (m), LAST_SOURCE_LINE (m));
-
-      gcj::source_location jloc;
-      jloc.fid = junit->files.id (LINEMAP_FILE (m));
-      jloc.line = LAST_SOURCE_LINE (m);
-      jloc.col = 0;
-
-      stack->add (jloc);
-    }
-}
-
-static void
-unwind (gcj::jumpunit *junit, source_location loc,
+unwind (gcj::unit *unit, source_location loc,
 	gcj::unwind_stack *stack, const char *prefix)
 {
-  unwind_macro (junit, loc, stack->macro (), prefix);
-  unwind_include (junit, loc, stack->include (), prefix);
+  unwind_macro (unit, loc, &stack->macro, prefix);
+  unwind_include (unit, loc, &stack->include, prefix);
+}
+
+static std::string
+spell (const cpp_token_arg *token)
+{
+  return std::string (); // TODO
 }
 
 static void
-cb_cpp_token (void *arg, void  *)
+cb_cpp_token (void *arg, void  *data)
 {
-  fprintf (stderr, "cpp_token\n");
-  unwind (((cpp_token_arg *) arg)->loc, "cpp_token");
+  gcj::set *set = (gcj::set *) data;
+  gcj::unit *unit = set->current ();
+
+  source_location loc = ((cpp_token_arg *) arg)->loc;
+
+  gcj::macro_stack stack;
+  unwind_macro (unit, loc, &stack, "cpp_token");
+
+  if (stack.length () == 0)
+    return;
+
+  fprintf (stderr, "cpp_token at %s:%d,%d\n",
+	   LOCATION_FILE (loc), LOCATION_LINE (loc), LOCATION_COLUMN (loc));
+
+  //unwind_include (unit, loc, &stack.include, "cpp_token");
+
+  gcj::context *ctx = unit->get (unit->current_macro_source_stack);
+  gcj::jump_to *to = ctx->jump (gcj::file_location (loc), 0);
+  assert (to && to->get_expansion ());
+  to->get_expansion ()->add (spell ((cpp_token_arg *) arg),
+			     gcj::source_stack (stack));
 }
 
 static void
-cb_external_ref (void *arg, void *)
+build_ref_jump_from (const gcj::file_location& loc,
+		     int len,
+		     gcj::context *ctx, const gcj::macro_stack& stack,
+		     gcj::jump_from *from)
 {
+  if (stack.length () == 0)
+    *from = gcj::jump_from (loc, len);
+  else
+    {
+      gcj::jump_to *jump_to = ctx->jump (loc, 0);
+      assert (jump_to && jump_to->get_expansion ());
+      int id = jump_to->get_expansion ()->id (gcj::source_stack (stack));
+      *from = gcj::jump_from (loc, 0, id);
+    }
+}
+
+static void
+build_ref_jump_to (gcj::context *ctx,
+		   const gcj::file_location& loc,
+		   const gcj::macro_stack& stack,
+		   gcj::jump_to *to)
+{
+  if (stack.length () == 0)
+    *to = gcj::jump_to (ctx, loc);
+  else
+    {
+      gcj::jump_to *jump_to = ctx->jump (loc, 0);
+      assert (jump_to && jump_to->get_expansion ());
+      int id = jump_to->get_expansion ()->id (gcj::source_stack (stack));
+      *to = gcj::jump_to (ctx, loc, id);
+    }
+}
+
+static void
+cb_external_ref (void *arg, void *data)
+{
+  gcj::set *set = (gcj::set *) data;
+  gcj::unit *unit = set->current();
+
   tree decl = ((external_ref_arg *) arg)->decl;
-  source_location loc = ((external_ref_arg *) arg)->loc;
+  source_location from_loc = ((external_ref_arg *) arg)->loc;
+  source_location to_loc = DECL_SOURCE_LOCATION (decl);
   fprintf (stderr, "build_external_ref %s declared at %s:%d,%d\n",
 	   IDENTIFIER_POINTER (DECL_NAME (decl)),
-	   DECL_SOURCE_FILE (decl),
-	   DECL_SOURCE_LINE (decl),
-	   DECL_SOURCE_COLUMN (decl));
-  unwind (DECL_SOURCE_LOCATION (decl), "declare");
-
+	   LOCATION_FILE (to_loc),
+	   LOCATION_LINE (to_loc),
+	   LOCATION_COLUMN (to_loc));
+  
   fprintf (stderr, "refered by %s:%d,%d\n",
-	   LOCATION_FILE (loc),
-	   LOCATION_LINE (loc),
-	   LOCATION_COLUMN (loc));
-  unwind (loc, "refer");
+	   LOCATION_FILE (from_loc),
+	   LOCATION_LINE (from_loc),
+	   LOCATION_COLUMN (from_loc));
+
+  gcj::unwind_stack from_stack;
+  unwind (unit, from_loc, &from_stack, "refer");
+
+  gcj::context *from = unit->get (from_stack.include);
+  gcj::jump_from jump_from;
+  build_ref_jump_from (gcj::file_location (from_loc),
+		       strlen (IDENTIFIER_POINTER (DECL_NAME (decl))),
+		       from, from_stack.macro,
+		       &jump_from);
+
+  gcj::unwind_stack to_stack;
+  unwind (unit, to_loc, &to_stack, "declare");
+
+  gcj::context *to = unit->get (to_stack.include);
+  gcj::jump_to jump_to;
+  build_ref_jump_to (to,
+		     gcj::file_location (to_loc),
+		     to_stack.macro,
+		     &jump_to);
+
+  from->add (jump_from, jump_to);
 }
 
 static void
 cb_expand_macro (void *arg, void *data)
 {
-  gcj::jumpset *set = (gcj::jumpset *) data;
+  gcj::set *set = (gcj::set *) data;
+  gcj::unit *unit = set->current ();
 
   const cpp_token *token = ((expand_macro_arg *) arg)->token;
-  source_location loc = ((expand_macro_arg *) arg)->loc;
-  source_location macro_loc = ((expand_macro_arg *) arg)->macro_loc;
+  source_location from_loc = ((expand_macro_arg *) arg)->loc;
+  source_location to_loc = ((expand_macro_arg *) arg)->macro_loc;
+
+  assert (token->type == CPP_NAME);
+  const char *name = (const char *) NODE_NAME (token->val.node.spelling);
 
   fprintf (stderr, "enter_macro %s %s:%d,%d\n",
-	   token->type == CPP_NAME
-	   ? (const char *) NODE_NAME (token->val.node.spelling) : "<unknown>",
-	   LOCATION_FILE (loc), LOCATION_LINE (loc),
-	   LOCATION_COLUMN (loc));
+	   name,
+	   LOCATION_FILE (from_loc), LOCATION_LINE (from_loc),
+	   LOCATION_COLUMN (from_loc));
 
-  gcj::unwind_stack stack;
-  unwind (set->current (), loc, &stack, "macro");
+  gcj::unwind_stack from_stack;
+  unwind (unit, from_loc, &from_stack, "macro");
+
+  if (from_stack.macro.length () == 0)
+    unit->current_macro_source_stack = from_stack.include;
+
+  gcj::context *from;
+  gcj::expansion_point point (from_stack.include,
+			      gcj::source_location (unit, from_loc));
+  if (from_stack.macro.length () == 0)
+    from = unit->get (from_stack.include);
+  else
+    from = unit->get (from_stack.macro.front ()->include, point);
 
   fprintf (stderr,
 	   "enter_macro_context, macro %s defined at %s:%d,%d\n",
-	   token->type == CPP_NAME
-	   ? (const char *) NODE_NAME (token->val.node.spelling) : "<unknown>",
-	   LOCATION_FILE (macro_loc), LOCATION_LINE (macro_loc),
-	   LOCATION_COLUMN (macro_loc));
-  unwind (macro_loc, "define");
+	   name,
+	   LOCATION_FILE (to_loc), LOCATION_LINE (to_loc),
+	   LOCATION_COLUMN (to_loc));
+
+  gcj::unwind_stack to_stack;
+  unwind (unit, to_loc, &to_stack, "define");
+  assert (to_stack.macro.length () == 0);
+  gcj::context *to = unit->get (to_stack.include, point);
+
+  gcj::jump_from jump_from (from_stack.macro.length () == 0
+			    ? from_loc : from_stack.macro.front ()->loc.loc,
+			    strlen (name));
+  gcj::jump_to jump_to (to, gcj::file_location (to_loc),
+			from_stack.macro.length () == 0
+			? unit->get_expansion () : NULL);
+  from->add (jump_from, jump_to);
 }
 
 static void
 cb_finish (void *, void *data)
 {
   fprintf (stderr, "finish\n");
-  delete (gcj::jumpset *) data;
+  delete (gcj::set *) data;
 }
 
 int
@@ -353,37 +766,28 @@ plugin_init (plugin_name_args *plugin_info,
       return 1;
     }
 
-  gcj::jumpset *jumps = new gcj::jumpset;
+  gcj::set *set = new gcj::set;
 
   fprintf (stderr, "hello plugin\n");
   register_callback (plugin_info->base_name,
 		     PLUGIN_START_UNIT,
-		     cb_start_unit, jumps);
-/*
-  register_callback (plugin_info->base_name,
-		     PLUGIN_PRE_GENERICIZE,
-		     cb_pre_genericize, NULL);
-*/
+		     cb_start_unit, set);
 
   register_callback (plugin_info->base_name,
 		     PLUGIN_CPP_TOKEN,
-		     cb_cpp_token, jumps);
+		     cb_cpp_token, set);
 
   register_callback (plugin_info->base_name,
 		     PLUGIN_EXTERNAL_REF,
-		     cb_external_ref, jumps);
+		     cb_external_ref, set);
 
   register_callback (plugin_info->base_name,
 		     PLUGIN_EXPAND_MACRO,
-		     cb_expand_macro, jumps);
-
-  register_callback (plugin_info->base_name,
-		     PLUGIN_EXPAND_MACRO,
-		     cb_expand_macro, jumps);
+		     cb_expand_macro, set);
 
   register_callback (plugin_info->base_name,
 		     PLUGIN_FINISH,
-		     cb_finish, jumps);
+		     cb_finish, set);
 
   return 0;
 }
