@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <assert.h>
+#include <stdarg.h>
 
 #include <string>
 #include <map>
@@ -14,6 +15,9 @@
 #include "tree.h"
 #include "print-tree.h"
 #include "c-family/c-common.h"
+#include "cpplib.h"
+#include "wide-int-print.h"
+#include "real.h"
 
 int plugin_is_GPL_compatible;
 
@@ -21,7 +25,7 @@ static std::string
 escape(const char *str, char c)
 {
   std::string ret;
-  for (const char *p = str; *p; ++p)
+  for (const char *p = str; *p; ++ p)
     {
       if (*p == '\\' || *p == c)
 	ret += '\\';
@@ -30,19 +34,48 @@ escape(const char *str, char c)
   return ret;
 }
 
+struct logger
+{
+  logger (FILE *fp, bool enabled)
+  : fp (fp), enabled (enabled)
+  {
+  }
+
+  void
+  vtrace (const char *fmt, va_list ap)
+  {
+    if (enabled)
+      vfprintf (fp, fmt, ap);
+  }
+
+  FILE *fp;
+  bool enabled;
+};
+
 namespace gcj
 {
 
-template <typename type>
-class id_map
+void
+iprintf (FILE *fp, int i, const char *fmt, ...)
 {
-public:
+  for (int n = 0; n < i; ++ n)
+    fprintf (fp, "  ");
+
+  va_list ap;
+  va_start (ap, fmt);
+  vfprintf (fp, fmt, ap);
+  va_end (ap);
+}
+
+template <typename type>
+struct id_map
+{
   id_map ()
     : cur (0)
   {
   }
   id_map (const id_map& map)
-    : cur (map.cur), map (map.map)
+    : cur (map.cur), map (map.map), rmap (map.rmap)
   {
   }
 
@@ -50,13 +83,23 @@ public:
   get (const type& key)
   {
     if (map.find (key) == map.end ())
-      map.insert (std::make_pair (key, ++cur));
+    {
+      map.insert (std::make_pair (key, ++ cur));
+      rmap.insert (std::make_pair (cur, &map.find (key)->first));
+    }
     return map.find (key)->second;
   }
 
-private:
+  const type&
+  at (int id) const
+  {
+    assert (rmap.find (id) != rmap.end ());
+    return *rmap.find (id)->second;
+  }
+
   int cur;
   std::map<type, int> map;
+  std::map<int, const type *> rmap;
 };
 
 struct unit;
@@ -101,6 +144,11 @@ struct source_location
 {
   source_location (const source_location& loc)
     : fid (loc.fid), loc (loc.loc)
+  {
+  }
+
+  source_location (int fid)
+    : fid (fid)
   {
   }
 
@@ -150,7 +198,7 @@ struct expansion_point
   {
   }
 
-  expansion_point (const source_stack& include,
+  expansion_point (int include,
 		   const source_location& loc)
     : include (include), loc (loc)
   {
@@ -163,7 +211,7 @@ struct expansion_point
 	   || (! (rhs.include < include) && loc < rhs.loc);
   }
 
-  source_stack include;
+  int include;
   source_location loc;
 };
 
@@ -254,9 +302,9 @@ struct expansion
   }
 
   void
-  add (const std::string& token, const source_stack& stack)
+  add (const std::string& token, const source_stack& exp)
   {
-    tokens.push_back (expanded_token (token, map.get (stack)));
+    tokens.push_back (expanded_token (token, map.get (exp)));
   }
 
   int
@@ -320,8 +368,8 @@ struct jump_to
 
 struct context
 {
-  context ()
-    : id (0), surrounding (NULL)
+  context (int id)
+    : id (id), surrounding (NULL)
   {
   }
 
@@ -333,15 +381,12 @@ struct context
   }
 
   context *
-  expansion (const expansion_point& point, int *id)
+  expansion (int point)
   {
-    std::pair<std::map<expansion_point, context>::iterator, bool> pair;
-    pair = expansion_contexts.insert (std::make_pair (point, context ()));
+    std::pair<std::map<int, context>::iterator, bool> pair;
+    pair = expansion_contexts.insert (std::make_pair (point, context (point)));
     if (pair.second)
-      {
-        pair.first->second.id = ++*id;
-        pair.first->second.surrounding = this;
-      }
+      pair.first->second.surrounding = this;
     return &pair.first->second;
   }
 
@@ -377,44 +422,101 @@ struct context
       return NULL;
   }
 
+  void
+  dump (FILE *fp, int indet) const
+  {
+    iprintf (fp, indet, "jumps:\n");
+    std::map<jump_from, jump_to>::const_iterator jump;
+    for (jump = jumps.begin (); jump != jumps.end (); ++ jump)
+      {
+	iprintf (fp, indet + 1, "line,col: %d,%d %s:%d",
+		 jump->first.loc.line,
+		 jump->first.loc.col,
+		 jump->first.len
+		 ? "len" : "exp",
+		 jump->first.len
+		 ? jump->first.len : jump->first.expanded_id);
+
+        if (jump->second.ctx)
+	  {
+	    fprintf (fp, " => ");
+	    if (jump->second.ctx->surrounding)
+	      fprintf (fp, "expansion context: %d.%d",
+		       jump->second.ctx->surrounding->id,
+		       jump->second.ctx->id);
+	    else
+	      fprintf (fp, "context: %d",
+		       jump->second.ctx->id);
+	    fprintf (fp, " line,col: %d,%d",
+		     jump->second.loc.line,
+		     jump->second.loc.col);
+	    if (jump->second.expanded_id != 0)
+	      fprintf (fp, " exp:%d", jump->second.expanded_id);
+	  }
+
+	fprintf (fp, "\n");
+
+	if (jump->second.exp)
+	  {
+	    iprintf (fp, indet + 2, "expanded tokens:");
+
+	    std::vector<expanded_token>::const_iterator tok;
+	    for (tok = jump->second.exp->tokens.begin ();
+		 tok != jump->second.exp->tokens.end ();
+		 ++ tok)
+	    fprintf (fp, " %d \"%s\"",
+		     tok->id,
+		     escape (tok->token.c_str (), '"').c_str ());
+	    fprintf (fp, "\n");
+	  }
+      }
+
+    std::map<int, context>::const_iterator ctx;
+    for (ctx = expansion_contexts.begin ();
+	 ctx != expansion_contexts.end ();
+	 ++ ctx)
+      {
+	iprintf (fp, indet, "expansion context %d:\n",
+		 ctx->first);
+	ctx->second.dump (fp, indet + 1);
+      }
+  }
+
   int id;
   std::map<jump_from, jump_to> jumps;
   context *surrounding;
 
-  std::map<expansion_point, context> expansion_contexts;
+  std::map<int, context> expansion_contexts;
 };
 
 struct unit
 {
   unit (const unit& unit)
-    : args (unit.args),
-      context_id (unit.context_id),
+    : log (unit.log),
+      args (unit.args),
       contexts (unit.contexts),
       file_map (unit.file_map),
-      stack_map (unit.stack_map)
+      include_map (unit.include_map),
+      expansion_map (unit.expansion_map)
   {
   }
 
-  unit (const std::string& args)
-    : args (args), context_id (0)
+  unit (logger *log, const std::string& args)
+    : log (log), args (args)
   {
-  }
-
-  context *
-  get (const source_stack& include)
-  {
-    std::pair<std::map<source_stack, context>::iterator, bool> pair;
-    pair = contexts.insert (std::make_pair (include, context ()));
-    if (pair.second)
-      pair.first->second.id = ++context_id;
-    return &pair.first->second;
   }
 
   context *
-  get (const source_stack& include,
-       const expansion_point& point)
+  get (int include)
   {
-    return get (include)->expansion (point, &context_id);
+    contexts.insert (std::make_pair (include, context (include)));
+    return &contexts.find (include)->second;
+  }
+
+  context *
+  get (int include, int point)
+  {
+    return get (include)->expansion (point);
   }
 
   expansion *
@@ -425,31 +527,80 @@ struct unit
   }
 
   int
-  fileid (const char *file)
+  file_id (const char *file)
   {
     return file_map.get (file);
   }
 
   int
-  stackid (const source_stack& stack)
+  include_id (const source_stack& include)
   {
-    return stack_map.get (stack);
+    return include_map.get (include);
   }
 
+  int
+  expansion_id (const expansion_point& point)
+  {
+    return expansion_map.get (point);
+  }
+
+  void
+  dump (FILE *fp, int indet) const
+  {
+    iprintf (fp, indet, "args: %s\n", args.c_str ());
+
+    std::map<int, const source_stack*>::const_iterator inc;
+    for (inc = include_map.rmap.begin ();
+	 inc != include_map.rmap.end ();
+	 ++ inc)
+      {
+	iprintf (fp, indet, "include %d:\n", inc->first);
+	std::vector<source_location>::const_iterator loc;
+	for (loc = inc->second->locs.begin ();
+	     loc != inc->second->locs.end ();
+	     ++ loc)
+	  iprintf (fp, indet + 1, "from %s:%d,%d\n",
+		   file_map.at (loc->fid).c_str (),
+		   loc->loc.line, loc->loc.col);
+      }
+
+    std::map<int, context>::const_iterator it;
+    for (it = contexts.begin (); it != contexts.end (); ++ it)
+      {
+	iprintf (fp, indet, "context %d:\n", it->first);
+        it->second.dump (fp, indet + 1);
+      }
+  }
+
+  void
+  trace (const char *fmt, ...)
+  {
+    va_list ap;
+    va_start (ap, fmt);
+    log->vtrace (fmt, ap);
+    va_end (ap);
+  }
+
+  logger *log;
   std::string args;
-  int context_id;
-  std::map<source_stack, context> contexts;
+  std::map<int, context> contexts;
   std::list<expansion> expansions;
   id_map<std::string> file_map;
-  id_map<source_stack> stack_map;
+  id_map<source_stack> include_map;
+  id_map<expansion_point> expansion_map;
 };
 
 struct set
 {
+  set ()
+  : log (stderr, false)
+  {
+  }
+
   void
   next (const std::string& args)
   {
-    units.push_back (unit (args));
+    units.push_back (unit (&log, args));
   }
 
   unit *
@@ -458,6 +609,27 @@ struct set
     return &units.back ();
   }
 
+  void
+  dump (FILE *fp, int indet) const
+  {
+    std::list<unit>::const_iterator unit;
+    for (unit = units.begin (); unit != units.end (); ++ unit)
+      {
+	iprintf (fp, indet, "unit:\n");
+	unit->dump (fp, indet + 1);
+      }
+  }
+
+  void
+  trace (const char *fmt, ...)
+  {
+    va_list ap;
+    va_start (ap, fmt);
+    log.vtrace (fmt, ap);
+    va_end (ap);
+  }
+
+  logger log;
   std::list<unit> units;
 };
 
@@ -473,12 +645,12 @@ file_location::file_location (::source_location l)
 }
 
 source_location::source_location (unit *unit, ::source_location l)
-  : fid (unit->fileid (LOCATION_FILE (l))), loc (l)
+  : fid (unit->file_id (LOCATION_FILE (l))), loc (l)
 {
 }
 
 source_location::source_location (unit *unit, const line_map_ordinary *m)
-  : fid (unit->fileid (LINEMAP_FILE (m))),
+  : fid (unit->file_id (LINEMAP_FILE (m))),
     loc (LAST_SOURCE_LINE (m), 0)
 {
 }
@@ -486,7 +658,7 @@ source_location::source_location (unit *unit, const line_map_ordinary *m)
 source_stack::source_stack (const macro_stack& stack)
 {
   std::vector<expansion_point>::const_iterator it;
-  for (it = stack.points.begin (); it != stack.points.end (); ++it)
+  for (it = stack.points.begin (); it != stack.points.end (); ++ it)
     locs.push_back (it->loc);
 }
 
@@ -498,26 +670,26 @@ cb_start_unit (void *, void *data)
   gcj::set *set = (gcj::set *) data;
 
   std::string args;
-  for (size_t i = 1; i < save_decoded_options_count; ++i)
+  for (size_t i = 1; i < save_decoded_options_count; ++ i)
     {
-      fprintf (stderr, "option: %lu %s %s",
-	       save_decoded_options[i].opt_index,
-	       save_decoded_options[i].arg,
-	       save_decoded_options[i].orig_option_with_args_text);
-      for (size_t j = 0; j < save_decoded_options[i].canonical_option_num_elements; ++j)
+      set->trace ("option: %lu %s %s",
+		  save_decoded_options[i].opt_index,
+		  save_decoded_options[i].arg,
+		  save_decoded_options[i].orig_option_with_args_text);
+      for (size_t j = 0; j < save_decoded_options[i].canonical_option_num_elements; ++ j)
 	{
-	  fprintf (stderr, "\n  %s",
-		   save_decoded_options[i].canonical_option[j]);
+	  set->trace ("\n  %s",
+		      save_decoded_options[i].canonical_option[j]);
 
-	  if (!args.empty()) args += ' ';
+	  if (! args.empty()) args += ' ';
 	  args += escape(save_decoded_options[i].canonical_option[j], ' ');
 	}
-      fprintf (stderr, "\n");
+      set->trace ("\n");
     }
 
   set->next (args);
 
-  if (!flag_syntax_only)
+  if (! flag_syntax_only)
     {
       section * sec;
       sec = get_section (".GCJ.plugin",
@@ -539,6 +711,9 @@ unwind_include (gcj::unit *unit, source_location loc,
 {
   assert (loc > BUILTINS_LOCATION);
 
+  int fid = unit->file_id (LOCATION_FILE (loc));
+  stack->add (gcj::source_location (fid));
+
   const line_map_ordinary *m;
   linemap_resolve_location (line_table, loc,
 			    LRK_MACRO_EXPANSION_POINT, &m);
@@ -546,9 +721,9 @@ unwind_include (gcj::unit *unit, source_location loc,
   while (! MAIN_FILE_P (m))
     {
       m = INCLUDED_FROM (line_table, m);
-      fprintf (stderr, "  %s, included from %s:%d\n",
-	       prefix,
-	       LINEMAP_FILE (m), LAST_SOURCE_LINE (m));
+      unit->trace ("  %s, included from %s:%d\n",
+		   prefix,
+		   LINEMAP_FILE (m), LAST_SOURCE_LINE (m));
 
       stack->add (gcj::source_location (unit, m));
     }
@@ -571,14 +746,15 @@ unwind_macro (gcj::unit *unit, source_location loc,
 	linemap_resolve_location (line_table, w,
 				  LRK_MACRO_DEFINITION_LOCATION,
 				  NULL);
-      fprintf (stderr, "  %s, expanded from %s:%d,%d\n",
-	       prefix,
-	       LOCATION_FILE (l), LOCATION_LINE (l), LOCATION_COLUMN (l));
+      unit->trace ("  %s, expanded from %s:%d,%d\n",
+		   prefix,
+		   LOCATION_FILE (l), LOCATION_LINE (l),
+		   LOCATION_COLUMN (l));
 
       gcj::source_stack include;
       unwind_include (unit, l, &include, prefix);
 
-      stack->add (gcj::expansion_point (include,
+      stack->add (gcj::expansion_point (unit->include_id (include),
 					gcj::source_location (unit, l)));
     }
 }
@@ -592,9 +768,70 @@ unwind (gcj::unit *unit, source_location loc,
 }
 
 static std::string
+spell_integer (tree value)
+{
+  char buf[WIDE_INT_PRINT_BUFFER_SIZE];
+  print_dec (value, buf, TYPE_SIGN (TREE_TYPE (value)));
+  return buf;
+}
+
+static std::string
+spell_real (tree value)
+{
+  REAL_VALUE_TYPE d;
+  d = TREE_REAL_CST (value);
+  char buf[60];
+  real_to_decimal (buf, &d, sizeof (buf), 0, 1);
+  return buf;
+}
+
+#define OP(e, s) s,
+#define TK(e, s) #e,
+static const char *spellings[N_TTYPES] = { TTYPE_TABLE };
+#undef OP
+#undef TK
+
+static std::string
 spell (const cpp_token_arg *token)
 {
-  return std::string (); // TODO
+  if (token->value != NULL_TREE
+      && token->type != CPP_PRAGMA)
+    {
+      tree value = token->value;
+      if (TREE_CODE (value) == USERDEF_LITERAL)
+	value = USERDEF_LITERAL_VALUE (value);
+      tree_code code = TREE_CODE (value);
+
+      if (code == IDENTIFIER_NODE)
+	return IDENTIFIER_POINTER (value);
+      else if (code == INTEGER_CST)
+	return spell_integer (value);
+      else if (code == REAL_CST)
+	return spell_real (value);
+      else if (code == COMPLEX_CST)
+	{
+	  if (TREE_CODE (TREE_IMAGPART (value)) == INTEGER_CST)
+	    return spell_integer (TREE_IMAGPART (value)) + 'i';
+	  else if (TREE_CODE (TREE_IMAGPART (value)) == REAL_CST)
+	    return spell_real (TREE_IMAGPART (value)) + 'i';
+	}
+      else if (code == STRING_CST)
+	{
+	  std::string str;
+	  const char *p;
+	  for (p = TREE_STRING_POINTER (value); *p; ++ p)
+	    {
+	      if (*p == '\n') str += "\\n";
+	      else if (*p == '\t') str += "\\t";
+	      else if (*p == '\r') str += "\\r";
+	      else if (*p == '\\') str += "\\\\";
+	      else if (*p == '\"') str += "\\\"";
+	      else str += *p;
+	    }
+	  return '"' + str + '"';
+	}
+    }
+  return spellings[token->type];
 }
 
 static void
@@ -611,18 +848,18 @@ cb_cpp_token (void *arg, void  *data)
   if (stack.macro.length () == 0)
     return;
 
-  fprintf (stderr, "cpp_token at %u %s:%d,%d\n",
-	   loc,
-	   LOCATION_FILE (loc), LOCATION_LINE (loc), LOCATION_COLUMN (loc));
+  set->trace ("cpp_token at %s:%d,%d\n",
+	      LOCATION_FILE (loc), LOCATION_LINE (loc),
+	      LOCATION_COLUMN (loc));
 
   unwind_include (unit, loc, &stack.include, "cpp_token");
 
-  // TOFIX, stack.include is not accurate
-  gcj::context *ctx = unit->get (stack.include);
+  gcj::context *ctx = unit->get (unit->include_id (stack.include));
   gcj::jump_to *to = ctx->jump (gcj::file_location (loc), 0);
   assert (to && to->get_expansion ());
-  to->get_expansion ()->add (spell ((cpp_token_arg *) arg),
-			     gcj::source_stack (stack.macro));
+  gcj::source_stack exp (stack.macro);
+  std::string token = spell ((cpp_token_arg *) arg);
+  to->get_expansion ()->add (token, exp);
 }
 
 static void
@@ -637,7 +874,8 @@ build_ref_jump_from (const gcj::file_location& loc,
     {
       gcj::jump_to *jump_to = ctx->jump (loc, 0);
       assert (jump_to && jump_to->get_expansion ());
-      int id = jump_to->get_expansion ()->id (gcj::source_stack (stack));
+      gcj::source_stack exp (stack);
+      int id = jump_to->get_expansion ()->id (exp);
       *from = gcj::jump_from (loc, 0, id);
     }
 }
@@ -668,21 +906,21 @@ cb_external_ref (void *arg, void *data)
   tree decl = ((external_ref_arg *) arg)->decl;
   source_location from_loc = ((external_ref_arg *) arg)->loc;
   source_location to_loc = DECL_SOURCE_LOCATION (decl);
-  fprintf (stderr, "build_external_ref %s declared at %s:%d,%d\n",
-	   IDENTIFIER_POINTER (DECL_NAME (decl)),
-	   LOCATION_FILE (to_loc),
-	   LOCATION_LINE (to_loc),
-	   LOCATION_COLUMN (to_loc));
+  set->trace ("build_external_ref %s declared at %s:%d,%d\n",
+	      IDENTIFIER_POINTER (DECL_NAME (decl)),
+	      LOCATION_FILE (to_loc),
+	      LOCATION_LINE (to_loc),
+	      LOCATION_COLUMN (to_loc));
   
-  fprintf (stderr, "refered by %s:%d,%d\n",
-	   LOCATION_FILE (from_loc),
-	   LOCATION_LINE (from_loc),
-	   LOCATION_COLUMN (from_loc));
+  set->trace ("refered by %s:%d,%d\n",
+	      LOCATION_FILE (from_loc),
+	      LOCATION_LINE (from_loc),
+	      LOCATION_COLUMN (from_loc));
 
   gcj::unwind_stack from_stack;
   unwind (unit, from_loc, &from_stack, "refer");
 
-  gcj::context *from = unit->get (from_stack.include);
+  gcj::context *from = unit->get (unit->include_id (from_stack.include));
   gcj::jump_from jump_from;
   build_ref_jump_from (gcj::file_location (from_loc),
 		       strlen (IDENTIFIER_POINTER (DECL_NAME (decl))),
@@ -692,7 +930,7 @@ cb_external_ref (void *arg, void *data)
   gcj::unwind_stack to_stack;
   unwind (unit, to_loc, &to_stack, "declare");
 
-  gcj::context *to = unit->get (to_stack.include);
+  gcj::context *to = unit->get (unit->include_id (to_stack.include));
   gcj::jump_to jump_to;
   build_ref_jump_to (to,
 		     gcj::file_location (to_loc),
@@ -715,33 +953,33 @@ cb_expand_macro (void *arg, void *data)
   assert (token->type == CPP_NAME);
   const char *name = (const char *) NODE_NAME (token->val.node.spelling);
 
-  fprintf (stderr, "enter_macro %u %s %s:%d,%d\n",
-           from_loc,
-	   name,
-	   LOCATION_FILE (from_loc), LOCATION_LINE (from_loc),
-	   LOCATION_COLUMN (from_loc));
+  set->trace ("enter_macro %s %s:%d,%d\n",
+	      name,
+	      LOCATION_FILE (from_loc), LOCATION_LINE (from_loc),
+	      LOCATION_COLUMN (from_loc));
 
   gcj::unwind_stack from_stack;
   unwind (unit, from_loc, &from_stack, "macro");
 
+  int iid = unit->include_id (from_stack.include);
   gcj::context *from;
-  gcj::expansion_point point (from_stack.include,
+  gcj::expansion_point point (iid,
 			      gcj::source_location (unit, from_loc));
+  int eid = unit->expansion_id (point);
   if (from_stack.macro.length () == 0)
-    from = unit->get (from_stack.include);
+    from = unit->get (iid);
   else
-    from = unit->get (from_stack.macro.front ()->include, point);
+    from = unit->get (from_stack.macro.front ()->include, eid);
 
-  fprintf (stderr,
-	   "enter_macro_context, macro %s defined at %s:%d,%d\n",
-	   name,
-	   LOCATION_FILE (to_loc), LOCATION_LINE (to_loc),
-	   LOCATION_COLUMN (to_loc));
+  set->trace ("enter_macro_context, macro %s defined at %s:%d,%d\n",
+	      name,
+	      LOCATION_FILE (to_loc), LOCATION_LINE (to_loc),
+	      LOCATION_COLUMN (to_loc));
 
   gcj::unwind_stack to_stack;
   unwind (unit, to_loc, &to_stack, "define");
   assert (to_stack.macro.length () == 0);
-  gcj::context *to = unit->get (to_stack.include, point);
+  gcj::context *to = unit->get (unit->include_id (to_stack.include), eid);
 
   gcj::jump_from jump_from (from_stack.macro.length () == 0
 			    ? from_loc : from_stack.macro.front ()->loc.loc,
@@ -755,15 +993,17 @@ cb_expand_macro (void *arg, void *data)
 static void
 cb_finish (void *, void *data)
 {
-  fprintf (stderr, "finish\n");
-  delete (gcj::set *) data;
+  gcj::set *set = (gcj::set *) data;
+  set->trace ("finish\n");
+  set->dump (stderr, 0);
+  delete set;
 }
 
 int
 plugin_init (plugin_name_args *plugin_info,
 	     plugin_gcc_version *version)
 {
-  if (!plugin_default_version_check (version, &gcc_version))
+  if (! plugin_default_version_check (version, &gcc_version))
     {
       fprintf (stderr, "This GCC plugin is for version %d.%d\n",
 	       GCCPLUGIN_VERSION_MAJOR,
@@ -773,7 +1013,7 @@ plugin_init (plugin_name_args *plugin_info,
 
   gcj::set *set = new gcj::set;
 
-  fprintf (stderr, "hello plugin\n");
+  set->trace ("hello plugin\n");
   register_callback (plugin_info->base_name,
 		     PLUGIN_START_UNIT,
 		     cb_start_unit, set);
