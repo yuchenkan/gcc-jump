@@ -3,9 +3,6 @@
 #include <stdarg.h>
 
 #include <string>
-#include <map>
-#include <list>
-#include <vector>
 
 #include "gcc-plugin.h"
 #include "plugin-version.h"
@@ -19,720 +16,29 @@
 #include "wide-int-print.h"
 #include "real.h"
 
+#include "gcj.hpp"
+
 int plugin_is_GPL_compatible;
 
-static std::string
-escape(const char *str, char c)
+static gcj::file_location
+build_file_location (source_location l)
 {
-  std::string ret;
-  for (const char *p = str; *p; ++ p)
-    {
-      if (*p == '\\' || *p == c)
-	ret += '\\';
-      ret += *p;
-    }
-  return ret;
+  return gcj::file_location (LOCATION_LINE (l), LOCATION_COLUMN (l));
 }
 
-struct logger
+static gcj::source_location
+build_source_location (gcj::unit *unit, source_location l)
 {
-  logger (FILE *fp, bool enabled)
-  : fp (fp), enabled (enabled)
-  {
-  }
-
-  void
-  vtrace (const char *fmt, va_list ap)
-  {
-    if (enabled)
-      vfprintf (fp, fmt, ap);
-  }
-
-  FILE *fp;
-  bool enabled;
-};
-
-namespace gcj
-{
-
-void
-iprintf (FILE *fp, int i, const char *fmt, ...)
-{
-  for (int n = 0; n < i; ++ n)
-    fprintf (fp, "  ");
-
-  va_list ap;
-  va_start (ap, fmt);
-  vfprintf (fp, fmt, ap);
-  va_end (ap);
+  return gcj::source_location (unit->file_id (LOCATION_FILE (l)),
+			       build_file_location (l));
 }
 
-template <typename type>
-struct id_map
+static gcj::source_location
+build_source_location (gcj::unit *unit, const line_map_ordinary *m)
 {
-  id_map ()
-    : cur (0)
-  {
-  }
-  id_map (const id_map& map)
-    : cur (map.cur), map (map.map), rmap (map.rmap)
-  {
-  }
-
-  int
-  get (const type& key) const
-  {
-    return map.find (key) == map.end ()
-	   ? 0 : map.find (key)->second;
-  }
-
-  int
-  get (const type& key)
-  {
-    if (map.find (key) == map.end ())
-    {
-      map.insert (std::make_pair (key, ++ cur));
-      rmap.insert (std::make_pair (cur, &map.find (key)->first));
-    }
-    return map.find (key)->second;
-  }
-
-  const type&
-  at (int id) const
-  {
-    assert (rmap.find (id) != rmap.end ());
-    return *rmap.find (id)->second;
-  }
-
-  int cur;
-  std::map<type, int> map;
-  std::map<int, const type *> rmap;
-};
-
-struct unit;
-
-struct file_location
-{
-  file_location ()
-    : line (0), col (0)
-  {
-  }
-
-  file_location (const file_location& loc)
-    : line (loc.line), col (loc.col)
-  {
-  }
-
-  file_location (int l, int c)
-    : line (l), col (c)
-  {
-  }
-
-  file_location (::source_location l);
-
-  bool
-  operator< (const file_location& rhs) const
-  {
-    return line < rhs.line
-	   || (! (rhs.line < line) && col < rhs.col);
-  }
-
-  bool
-  operator!= (const file_location &rhs) const
-  {
-    return line != rhs.line || col != rhs.col;
-  }
-
-  int line;
-  int col;
-};
-
-struct source_location
-{
-  source_location (const source_location& loc)
-    : fid (loc.fid), loc (loc.loc)
-  {
-  }
-
-  source_location (int fid)
-    : fid (fid)
-  {
-  }
-
-  source_location (unit *unit, ::source_location l);
-  source_location (unit *unit, const line_map_ordinary *m);
-
-  bool
-  operator< (const source_location& rhs) const
-  {
-    return fid < rhs.fid
-	   || (! (rhs.fid < fid) && loc < rhs.loc);
-  }
-
-  int fid;
-  file_location loc;
-};
-
-struct macro_stack;
-
-struct source_stack
-{
-  source_stack ()
-  {
-  }
-
-  source_stack (const macro_stack& stack);
-
-  bool
-  operator< (const source_stack& rhs) const
-  {
-    return locs < rhs.locs;
-  }
-
-  void
-  add (const source_location& loc)
-  {
-    locs.push_back (loc);
-  }
-
-  std::vector<source_location> locs;
-};
-
-struct expansion_point
-{
-  expansion_point (const expansion_point& point)
-    : include (point.include), loc (point.loc)
-  {
-  }
-
-  expansion_point (int include,
-		   const source_location& loc)
-    : include (include), loc (loc)
-  {
-  }
-
-  bool
-  operator< (const expansion_point& rhs) const
-  {
-    return include < rhs.include
-	   || (! (rhs.include < include) && loc < rhs.loc);
-  }
-
-  int include;
-  source_location loc;
-};
-
-struct macro_stack
-{
-  void
-  add (const expansion_point& point)
-  {
-    points.push_back (point);
-  }
-
-  int
-  length () const
-  {
-    return points.size ();
-  }
-
-  expansion_point *
-  front ()
-  {
-    return &points.front ();
-  }
-
-  std::vector<expansion_point> points;
-};
-
-struct jump_from
-{
-  jump_from ()
-    : len (0), expanded_id (0)
-  {
-  }
-
-  jump_from (const jump_from& from)
-    : loc (from.loc), len (from.len),
-      expanded_id (from.expanded_id)
-  {
-  }
-
-  jump_from (const file_location& loc, int len)
-    : loc (loc), len (len), expanded_id (0)
-  {
-  }
-
-  jump_from (const file_location& loc, int, int expanded_id)
-    : loc (loc), len (0), expanded_id (expanded_id)
-  {
-  }
-
-  bool
-  operator< (const jump_from &rhs) const
-  {
-    return loc < rhs.loc
-	   || (! (rhs.loc < loc)
-	       && expanded_id < rhs.expanded_id);
-  }
-
-  file_location loc;
-  int len;
-  int expanded_id;
-};
-
-struct expanded_token
-{
-  expanded_token (const expanded_token& token)
-    : token (token.token), id (token.id)
-  {
-  }
-
-  expanded_token (const std::string& token, int id)
-    : token (token), id (id)
-  {
-  }
-
-  std::string token;
-  int id;
-};
-
-struct expansion
-{
-  expansion ()
-  {
-  }
-
-  expansion (const expansion& exp)
-    : map (exp.map), tokens (exp.tokens)
-  {
-  }
-
-  void
-  add (const std::string& token, const source_stack& exp)
-  {
-    tokens.push_back (expanded_token (token, map.get (exp)));
-  }
-
-  int
-  id (const source_stack& stack) const
-  {
-    return map.get (stack);
-  }
-
-  id_map<source_stack> map;
-  std::vector<expanded_token> tokens;
-};
-
-struct context;
-
-struct jump_to
-{
-  jump_to ()
-    : include (0), point (0), expanded_id (0), exp (NULL)
-  {
-  }
-
-  jump_to (const jump_to& to)
-    : include (to.include), point (to.point),
-      loc (to.loc), expanded_id (to.expanded_id),
-      exp (to.exp)
-  {
-  }
-
-  jump_to (int include, int point,
-	   const file_location& loc)
-    : include (include), point (point), loc (loc),
-      expanded_id (0), exp (NULL)
-  {
-  }
-
-  jump_to (int include, int point,
-	   const file_location& loc, expansion *exp)
-    : include (include), point (point), loc (loc),
-      expanded_id (0), exp (exp)
-  {
-  }
-
-  jump_to (int include, int point,
-	   const file_location& loc, int expanded_id)
-    : include (include), point (point), loc (loc),
-      expanded_id (expanded_id), exp (NULL)
-  {
-  }
-
-  const expansion *
-  get_expansion () const
-  {
-    return exp;
-  }
-
-  expansion *
-  get_expansion ()
-  {
-    return (expansion *) ((const jump_to *) this)->get_expansion ();
-  }
-
-  int include;
-  int point;
-
-  file_location loc;
-  int expanded_id;
-
-  expansion *exp;
-};
-
-struct context
-{
-  context ()
-    : surrounding (NULL)
-  {
-  }
-
-  context (const context& ctx)
-    : jumps (ctx.jumps),
-      surrounding (ctx.surrounding),
-      expansion_contexts (ctx.expansion_contexts)
-  {
-  }
-
-  const context *
-  expansion (int point) const
-  {
-    return expansion_contexts.find (point) == expansion_contexts.end ()
-	   ? NULL : &expansion_contexts.find (point)->second;
-  }
-
-  context *
-  expansion (int point)
-  {
-    std::pair<std::map<int, context>::iterator, bool> pair;
-    pair = expansion_contexts.insert (std::make_pair (point, context ()));
-    if (pair.second)
-      pair.first->second.surrounding = this;
-    return &pair.first->second;
-  }
-
-  void
-  add (const jump_from& from, const jump_to& to)
-  {
-    assert (jumps.insert (std::make_pair (from, to)).second);
-  }
-
-  const jump_to *
-  jump (const file_location& loc, int expanded_id) const
-  {
-    jump_from from (loc, expanded_id);
-    std::map<jump_from, jump_to>::const_iterator it;
-    it = jumps.upper_bound (from);
-    if (it == jumps.begin ())
-      goto search_surrounding;
-    --it;
-
-    if (expanded_id != 0
-        && (it->first.loc != loc || it->first.expanded_id != expanded_id))
-      goto search_surrounding;
-
-    if (it->first.loc.line != loc.line
-	|| it->first.loc.col + it->first.len <= loc.col)
-      goto search_surrounding;
-
-    return &it->second;
-
-  search_surrounding:
-    if (surrounding)
-      return surrounding->jump (loc, expanded_id);
-    else
-      return NULL;
-  }
-
-  jump_to *
-  jump (const file_location& loc, int expanded_id)
-  {
-    return (jump_to *) ((const context *) this)->jump (loc, expanded_id);
-  }
-
-  void
-  dump (FILE *fp, int indet) const
-  {
-    iprintf (fp, indet, "jumps:\n");
-    std::map<jump_from, jump_to>::const_iterator jump;
-    for (jump = jumps.begin (); jump != jumps.end (); ++ jump)
-      {
-	iprintf (fp, indet + 1, "line,col: %d,%d %s:%d",
-		 jump->first.loc.line,
-		 jump->first.loc.col,
-		 jump->first.len
-		 ? "len" : "exp",
-		 jump->first.len
-		 ? jump->first.len : jump->first.expanded_id);
-
-	if (jump->second.include)
-	  {
-	    fprintf (fp, " => ");
-	    if (jump->second.point)
-	      fprintf (fp, "expansion context: %d.%d",
-		       jump->second.include, jump->second.point);
-	    else
-	      fprintf (fp, "context: %d", jump->second.include);
-	    fprintf (fp, " line,col: %d,%d",
-		     jump->second.loc.line,
-		     jump->second.loc.col);
-	    if (jump->second.expanded_id != 0)
-	      fprintf (fp, " exp:%d", jump->second.expanded_id);
-	  }
-
-	fprintf (fp, "\n");
-
-	if (jump->second.exp)
-	  {
-	    iprintf (fp, indet + 2, "expanded tokens:");
-
-	    std::vector<expanded_token>::const_iterator tok;
-	    for (tok = jump->second.exp->tokens.begin ();
-		 tok != jump->second.exp->tokens.end ();
-		 ++ tok)
-	    fprintf (fp, " %d \"%s\"",
-		     tok->id,
-		     escape (tok->token.c_str (), '"').c_str ());
-	    fprintf (fp, "\n");
-	  }
-      }
-
-    std::map<int, context>::const_iterator ctx;
-    for (ctx = expansion_contexts.begin ();
-	 ctx != expansion_contexts.end ();
-	 ++ ctx)
-      {
-	iprintf (fp, indet, "expansion context %d:\n",
-		 ctx->first);
-	ctx->second.dump (fp, indet + 1);
-      }
-  }
-
-
-  int id;
-  std::map<jump_from, jump_to> jumps;
-  context *surrounding;
-
-  std::map<int, context> expansion_contexts;
-};
-
-struct unit
-{
-  unit (const unit& unit)
-    : log (unit.log),
-      contexts (unit.contexts),
-      file_map (unit.file_map),
-      include_map (unit.include_map),
-      expansion_map (unit.expansion_map)
-  {
-  }
-
-  unit (logger *log)
-    : log (log)
-  {
-  }
-
-  const context *
-  get (int include) const
-  {
-    return contexts.find (include) == contexts.end ()
-	   ? NULL : &contexts.find (include)->second;
-  }
-
-  context *
-  get (int include)
-  {
-    contexts.insert (std::make_pair (include, context ()));
-    return &contexts.find (include)->second;
-  }
-
-  const context *
-  get (int include, int point) const
-  {
-    return get (include)->expansion (point);
-  }
-
-  context *
-  get (int include, int point)
-  {
-    return get (include)->expansion (point);
-  }
-
-  expansion *
-  get_expansion ()
-  {
-    expansions.push_back (expansion ());
-    return &expansions.back ();
-  }
-
-  int
-  file_id (const char *file)
-  {
-    return file_map.get (file);
-  }
-
-  int
-  include_id (const source_stack& include)
-  {
-    return include_map.get (include);
-  }
-
-  int
-  expansion_id (const expansion_point& point)
-  {
-    return expansion_map.get (point);
-  }
-
-  void
-  dump (FILE *fp, int indet) const
-  {
-    std::map<int, const source_stack*>::const_iterator inc;
-    for (inc = include_map.rmap.begin ();
-	 inc != include_map.rmap.end ();
-	 ++ inc)
-      {
-	iprintf (fp, indet, "include %d:\n", inc->first);
-	std::vector<source_location>::const_iterator loc;
-	for (loc = inc->second->locs.begin ();
-	     loc != inc->second->locs.end ();
-	     ++ loc)
-	  iprintf (fp, indet + 1, "from %s:%d,%d\n",
-		   file_map.at (loc->fid).c_str (),
-		   loc->loc.line, loc->loc.col);
-      }
-
-    std::map<int, context>::const_iterator ctx;
-    for (ctx = contexts.begin (); ctx != contexts.end (); ++ ctx)
-      {
-	iprintf (fp, indet, "context %d:\n", ctx->first);
-        ctx->second.dump (fp, indet + 1);
-      }
-  }
-
-  void
-  trace (const char *fmt, ...)
-  {
-    va_list ap;
-    va_start (ap, fmt);
-    log->vtrace (fmt, ap);
-    va_end (ap);
-  }
-
-  logger *log;
-  std::map<int, context> contexts;
-  std::list<expansion> expansions;
-  id_map<std::string> file_map;
-  id_map<source_stack> include_map;
-  id_map<expansion_point> expansion_map;
-};
-
-struct set
-{
-  set ()
-    : log (stderr, false)
-  {
-  }
-
-  set (FILE *fp)
-    : log (stderr, false)
-  {
-    load (fp);
-  }
-
-  void
-  next (const std::string& args)
-  {
-    int id = unit_map.get (args);
-    if (units.find (id) == units.end ())
-      {
-	units.insert (std::make_pair (id, unit (&log)));
-	cur = &units.find (id)->second;
-      }
-    else
-      cur = NULL;
-  }
-
-  unit *
-  current () const
-  {
-    return cur;
-  }
-
-  const unit *
-  get (int id) const
-  {
-    return NULL; // TODO
-  }
-
-  void
-  dump (FILE *fp, int indet) const
-  {
-    std::map<int, unit>::const_iterator unit;
-    for (unit = units.begin (); unit != units.end (); ++ unit)
-      {
-	iprintf (fp, indet, "unit %s:\n",
-		 unit_map.at (unit->first).c_str ());
-	unit->second.dump (fp, indet + 1);
-      }
-  }
-
-  void
-  save (FILE *fp) const
-  {
-  }
-
-  void
-  load (FILE *fp)
-  {
-    // TODO
-  }
-
-  void
-  trace (const char *fmt, ...)
-  {
-    va_list ap;
-    va_start (ap, fmt);
-    log.vtrace (fmt, ap);
-    va_end (ap);
-  }
-
-  logger log;
-  id_map<std::string> unit_map;
-  std::map<int, unit> units;
-  unit *cur;
-};
-
-struct unwind_stack
-{
-  macro_stack macro;
-  source_stack include;
-};
-
-file_location::file_location (::source_location l)
-  : line (LOCATION_LINE (l)), col (LOCATION_COLUMN (l))
-{
-}
-
-source_location::source_location (unit *unit, ::source_location l)
-  : fid (unit->file_id (LOCATION_FILE (l))), loc (l)
-{
-}
-
-source_location::source_location (unit *unit, const line_map_ordinary *m)
-  : fid (unit->file_id (LINEMAP_FILE (m))),
-    loc (LAST_SOURCE_LINE (m), 0)
-{
-}
-
-source_stack::source_stack (const macro_stack& stack)
-{
-  std::vector<expansion_point>::const_iterator it;
-  for (it = stack.points.begin (); it != stack.points.end (); ++ it)
-    locs.push_back (it->loc);
-}
-
+  return gcj::source_location (unit->file_id (LINEMAP_FILE (m)),
+			       gcj::file_location (LAST_SOURCE_LINE (m),
+						   0));
 }
 
 static void
@@ -796,7 +102,7 @@ unwind_include (gcj::unit *unit, source_location loc,
 		   prefix,
 		   LINEMAP_FILE (m), LAST_SOURCE_LINE (m));
 
-      stack->add (gcj::source_location (unit, m));
+      stack->add (build_source_location (unit, m));
     }
 }
 
@@ -826,7 +132,7 @@ unwind_macro (gcj::unit *unit, source_location loc,
       unwind_include (unit, l, &include, prefix);
 
       stack->add (gcj::expansion_point (unit->include_id (include),
-					gcj::source_location (unit, l)));
+					build_source_location (unit, l)));
     }
 }
 
@@ -929,7 +235,7 @@ cb_cpp_token (void *arg, void  *data)
   unwind_include (unit, loc, &stack.include, "cpp_token");
 
   gcj::context *ctx = unit->get (unit->include_id (stack.include));
-  gcj::jump_to *to = ctx->jump (gcj::file_location (loc), 0);
+  gcj::jump_to *to = ctx->jump (build_file_location (loc), 0);
   assert (to && to->get_expansion ());
   gcj::source_stack exp (stack.macro);
   std::string token = spell ((cpp_token_arg *) arg);
@@ -1001,7 +307,7 @@ cb_external_ref (void *arg, void *data)
 
   gcj::context *ctx = unit->get (unit->include_id (from_stack.include));
   gcj::jump_from jump_from;
-  build_ref_jump_from (gcj::file_location (from_loc),
+  build_ref_jump_from (build_file_location (from_loc),
 		       strlen (IDENTIFIER_POINTER (DECL_NAME (decl))),
 		       ctx, from_stack.macro,
 		       &jump_from);
@@ -1011,7 +317,7 @@ cb_external_ref (void *arg, void *data)
 
   gcj::jump_to jump_to;
   build_ref_jump_to (unit->include_id (to_stack.include),
-		     gcj::file_location (to_loc),
+		     build_file_location (to_loc),
 		     unit, to_stack.macro,
 		     &jump_to);
 
@@ -1045,7 +351,7 @@ cb_expand_macro (void *arg, void *data)
   int iid = unit->include_id (from_stack.include);
   gcj::context *ctx;
   gcj::expansion_point point (iid,
-			      gcj::source_location (unit, from_loc));
+			      build_source_location (unit, from_loc));
   int eid = unit->expansion_id (point);
   if (from_stack.macro.length () == 0)
     ctx = unit->get (iid);
@@ -1062,10 +368,11 @@ cb_expand_macro (void *arg, void *data)
   assert (to_stack.macro.length () == 0);
 
   gcj::jump_from jump_from (from_stack.macro.length () == 0
-			    ? from_loc : from_stack.macro.front ()->loc.loc,
+			    ? build_file_location (from_loc)
+			    : from_stack.macro.front ()->loc.loc,
 			    strlen (name));
   gcj::jump_to jump_to (unit->include_id (to_stack.include), eid,
-			gcj::file_location (to_loc),
+			build_file_location (to_loc),
 			from_stack.macro.length () == 0
 			? unit->get_expansion () : NULL);
   ctx->add (jump_from, jump_to);
