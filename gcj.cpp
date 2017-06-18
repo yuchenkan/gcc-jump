@@ -1,3 +1,5 @@
+#include <errno.h>
+
 #include "gcj.hpp"
 
 std::string
@@ -16,7 +18,24 @@ escape (const char *str, char c)
 namespace gcj
 {
 
-void
+static void
+save_string (FILE *fp, const std::string& str)
+{
+  save_int32 (fp, str.size ());
+  assert (fwrite (str.c_str (), 1, str.size (), fp) == str.size ());
+}
+
+static void
+load_string (FILE *fp, std::string *str)
+{
+  int32_t size;
+  load_int32 (fp, &size);
+  char buf[size];
+  assert ((int) fread (buf, 1, size, fp) == size);
+  *str = std::string (buf, size);
+}
+
+static void
 iprintf (FILE *fp, int i, const char *fmt, ...)
 {
   for (int n = 0; n < i; ++ n)
@@ -35,35 +54,103 @@ source_stack::source_stack (const macro_stack& stack)
     locs.push_back (it->loc);
 }
 
-const jump_to *
-context::jump (const file_location& loc, int expanded_id) const
+static void
+save_file_location (FILE *fp, const file_location& loc)
 {
-  jump_from from (loc, expanded_id);
+  save_int32 (fp, loc.line);
+  save_int32 (fp, loc.col);
+}
+
+static void
+load_file_location (FILE *fp, file_location *loc)
+{
+  load_int32 (fp, &loc->line);
+  load_int32 (fp, &loc->col);
+}
+
+static void
+save_source_location (FILE *fp, const source_location& loc)
+{
+  save_int32 (fp, loc.fid);
+  save_file_location (fp, loc.loc);
+}
+
+static void
+load_source_location (FILE *fp, source_location *loc)
+{
+  load_int32 (fp, &loc->fid);
+  load_file_location (fp, &loc->loc);
+}
+
+static void
+save_source_stack (FILE *fp, const source_stack& stack)
+{
+  save_int32 (fp, stack.locs.size ());
+  std::vector<source_location>::const_iterator it;
+  for (it = stack.locs.begin ();
+       it != stack.locs.end ();
+       ++ it)
+    save_source_location (fp, *it);
+}
+
+static void
+load_source_stack (FILE *fp, source_stack *stack)
+{
+  int32_t size;
+  load_int32 (fp, &size);
+  for (int i = 0; i < size; ++ i)
+    {
+      source_location loc;
+      load_source_location (fp, &loc);
+      stack->locs.push_back (loc);
+    }
+}
+
+static void
+save_expansion_point (FILE *fp, const expansion_point& point)
+{
+  save_int32 (fp, point.include);
+  save_source_location (fp, point.loc);
+}
+
+static void
+load_expansion_point (FILE *fp, expansion_point *point)
+{
+  load_int32 (fp, &point->include);
+  load_source_location (fp, &point->loc);
+}
+
+const jump_to *
+context::jump (const unit *unit,
+	       const file_location& loc, int expanded_id) const
+{
+  jump_from from (loc, 0, expanded_id);
   std::map<jump_from, jump_to>::const_iterator it;
   it = jumps.upper_bound (from);
   if (it == jumps.begin ())
     goto search_surrounding;
-  --it;
+  -- it;
 
   if (expanded_id != 0
       && (it->first.loc != loc || it->first.expanded_id != expanded_id))
     goto search_surrounding;
 
-  if (it->first.loc.line != loc.line
-      || it->first.loc.col + it->first.len <= loc.col)
+  if (expanded_id == 0
+      && (it->first.loc.line != loc.line
+	  || it->first.loc.col + it->first.len <= loc.col))
     goto search_surrounding;
 
   return &it->second;
 
 search_surrounding:
   if (surrounding)
-    return surrounding->jump (loc, expanded_id);
+    return unit->get (surrounding)->jump (unit, loc, expanded_id);
   else
     return NULL;
 }
 
 void
-context::dump (FILE *fp, int indet) const
+context::dump (FILE *fp, int indet, const unit *unit) const
 {
   iprintf (fp, indet, "jumps:\n");
   std::map<jump_from, jump_to>::const_iterator jump;
@@ -99,8 +186,10 @@ context::dump (FILE *fp, int indet) const
 	  iprintf (fp, indet + 2, "expanded tokens:");
 
 	  std::vector<expanded_token>::const_iterator tok;
-	  for (tok = jump->second.exp->tokens.begin ();
-	       tok != jump->second.exp->tokens.end ();
+	  const gcj::expansion *exp;
+	  exp = unit->get_expansion (jump->second.exp);
+	  for (tok = exp->tokens.begin ();
+	       tok != exp->tokens.end ();
 	       ++ tok)
 	  fprintf (fp, " %d \"%s\"",
 		   tok->id,
@@ -116,22 +205,85 @@ context::dump (FILE *fp, int indet) const
     {
       iprintf (fp, indet, "expansion context %d:\n",
 	       ctx->first);
-      ctx->second.dump (fp, indet + 1);
+      ctx->second.dump (fp, indet + 1, unit);
+    }
+}
+
+void
+context::save (FILE *fp) const
+{
+  save_int32 (fp, jumps.size ());
+  std::map<jump_from, jump_to>::const_iterator jmp;
+  for (jmp = jumps.begin (); jmp != jumps.end (); ++ jmp)
+    {
+      save_file_location (fp, jmp->first.loc);
+      save_int32 (fp, jmp->first.len);
+      save_int32 (fp, jmp->first.expanded_id);
+
+      save_int32 (fp, jmp->second.include);
+      save_int32 (fp, jmp->second.point);
+      save_file_location (fp, jmp->second.loc);
+      save_int32 (fp, jmp->second.expanded_id);
+      save_int32 (fp, jmp->second.exp);
+    }
+
+  save_int32 (fp, surrounding);
+
+  save_int32 (fp, expansion_contexts.size ());
+  std::map<int, context>::const_iterator ctx;
+  for (ctx = expansion_contexts.begin ();
+       ctx != expansion_contexts.end ();
+       ++ ctx)
+    {
+      save_int32 (fp, ctx->first);
+      ctx->second.save (fp);
+    }
+}
+
+void
+context::load (FILE *fp)
+{
+  int32_t jmp_size;
+  load_int32 (fp, &jmp_size);
+  for (int i = 0; i < jmp_size; ++ i)
+    {
+      jump_from from;
+      load_file_location (fp, &from.loc);
+      load_int32 (fp, &from.len);
+      load_int32 (fp, &from.expanded_id);
+
+      jump_to to;
+      load_int32 (fp, &to.include);
+      load_int32 (fp, &to.point);
+      load_file_location (fp, &to.loc);
+      load_int32 (fp, &to.expanded_id);
+      load_int32 (fp, &to.exp);
+
+      jumps.insert (std::make_pair (from, to));
+    }
+
+  load_int32 (fp, &surrounding);
+
+  int32_t ctx_size;
+  load_int32 (fp, &ctx_size);
+  for (int i = 0; i < ctx_size; ++ i)
+    {
+      int id;
+      load_int32 (fp, &id);
+      expansion_contexts.insert (std::make_pair (id, context ()));
+      expansion_contexts.find (id)->second.load (fp);
     }
 }
 
 void
 unit::dump (FILE *fp, int indet) const
 {
-  std::map<int, const source_stack*>::const_iterator inc;
-  for (inc = include_map.rmap.begin ();
-       inc != include_map.rmap.end ();
-       ++ inc)
+  for (int i = 1; i <= include_map.size (); ++ i)
     {
-      iprintf (fp, indet, "include %d:\n", inc->first);
+      iprintf (fp, indet, "include %d:\n", i);
       std::vector<source_location>::const_iterator loc;
-      for (loc = inc->second->locs.begin ();
-	   loc != inc->second->locs.end ();
+      for (loc = include_map.at (i).locs.begin ();
+	   loc != include_map.at (i).locs.end ();
 	   ++ loc)
 	iprintf (fp, indet + 1, "from %s:%d,%d\n",
 		 file_map.at (loc->fid).c_str (),
@@ -142,8 +294,83 @@ unit::dump (FILE *fp, int indet) const
   for (ctx = contexts.begin (); ctx != contexts.end (); ++ ctx)
     {
       iprintf (fp, indet, "context %d:\n", ctx->first);
-      ctx->second.dump (fp, indet + 1);
+      ctx->second.dump (fp, indet + 1, this);
     }
+}
+
+void
+unit::save (FILE *fp) const
+{
+  save_string (fp, input);
+  save_int32 (fp, input_id);
+
+  save_int32 (fp, contexts.size ());
+  std::map<int, context>::const_iterator ctx;
+  for (ctx = contexts.begin (); ctx != contexts.end (); ++ ctx)
+    {
+      save_int32 (fp, ctx->first);
+      ctx->second.save (fp);
+    }
+
+  save_int32 (fp, expansions.size ());
+  std::map<int, expansion>::const_iterator exp;
+  for (exp = expansions.begin (); exp != expansions.end (); ++ exp)
+    {
+      exp->second.map.save (fp, save_source_stack);
+
+      save_int32 (fp, exp->second.tokens.size ());
+      std::vector<expanded_token>::const_iterator tok;
+      for (tok = exp->second.tokens.begin ();
+	   tok != exp->second.tokens.end ();
+	   ++ tok)
+	{
+	  save_string (fp, tok->token);
+	  save_int32 (fp, tok->id);
+	}
+    }
+
+  file_map.save (fp, save_string);
+  include_map.save (fp, save_source_stack);
+  point_map.save (fp, save_expansion_point);
+}
+
+void
+unit::load (FILE *fp)
+{
+  load_string (fp, &input);
+  load_int32 (fp, &input_id);
+
+  int32_t ctx_size;
+  load_int32 (fp, &ctx_size);
+  for (int i = 0; i < ctx_size; ++ i)
+    {
+      int32_t id;
+      load_int32 (fp, &id);
+      contexts.insert (std::make_pair (id, context ()));
+      contexts.find (id)->second.load (fp);
+    }
+
+  int32_t expansion_size;
+  load_int32 (fp, &expansion_size);
+  for (int i = 0; i < expansion_size; ++ i)
+    {
+      expansion *exp = get_expansion (get_expansion ());
+      exp->map.load (fp, load_source_stack);
+
+      int32_t tok_size;
+      load_int32 (fp, &tok_size);
+      for (int j = 0; j < tok_size; ++ j)
+	{
+	  expanded_token tok;
+	  load_string (fp, &tok.token);
+	  load_int32 (fp, &tok.id);
+	  exp->tokens.push_back (tok);
+	}
+    }
+
+  file_map.load (fp, load_string);
+  include_map.load (fp, load_source_stack);
+  point_map.load (fp, load_expansion_point);
 }
 
 void
@@ -158,5 +385,46 @@ set::dump (FILE *fp, int indet) const
     }
 }
 
+void
+set::save () const
+{
+  FILE *fp = fopen (db.c_str (), "wb");
+  assert (fp);
+
+  unit_map.save (fp, save_string);
+
+  save_int32 (fp, units.size ());
+  std::map<int, unit>::const_iterator it;
+  for (it = units.begin (); it != units.end (); ++ it)
+    {
+      save_int32 (fp, it->first);
+      it->second.save (fp);
+    }
+
+  fclose (fp);
+}
+
+void
+set::load ()
+{
+  FILE *fp = fopen (db.c_str (), "rb");
+  if (! fp && errno == ENOENT)
+    return;
+  assert (fp);
+
+  unit_map.load (fp, load_string);
+
+  int32_t size;
+  load_int32 (fp, &size);
+  for (int i = 0; i < size; ++ i)
+    {
+      int id;
+      load_int32 (fp, &id);
+      units.insert (std::make_pair (id, unit (&log)));
+      units.find (id)->second.load (fp);
+    }
+
+  fclose (fp);
+}
 
 }

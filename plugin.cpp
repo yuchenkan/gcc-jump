@@ -46,25 +46,55 @@ cb_start_unit (void *, void *data)
 {
   gcj::set *set = (gcj::set *) data;
 
-  std::string args;
+  int cp = 0;
+  std::map<unsigned int, int> priorities;
+  priorities.insert (std::make_pair (OPT_SPECIAL_input_file, cp ++));
+  priorities.insert (std::make_pair (OPT_D, cp ++));
+  priorities.insert (std::make_pair (OPT_I, cp ++));
+
+  std::string input;
+  std::map<int, std::string> arg_map;
+
   for (size_t i = 1; i < save_decoded_options_count; ++ i)
     {
+      unsigned int opt_index;
+      opt_index = save_decoded_options[i].opt_index;
       set->trace ("option: %lu %s %s",
-		  save_decoded_options[i].opt_index,
+		  opt_index,
 		  save_decoded_options[i].arg,
 		  save_decoded_options[i].orig_option_with_args_text);
+
+      if (opt_index == OPT_SPECIAL_input_file)
+	input = save_decoded_options[i].arg;
+
+      int p;
+      p = priorities.find (opt_index) == priorities.end()
+	  ? 255 : priorities.find (opt_index)->second;
+
+      if (arg_map.find (p) == arg_map.end ())
+	arg_map.insert (std::make_pair (p, std::string ()));
+
+      std::string *a = &arg_map.find (p)->second;
       for (size_t j = 0; j < save_decoded_options[i].canonical_option_num_elements; ++ j)
 	{
 	  set->trace ("\n  %s",
 		      save_decoded_options[i].canonical_option[j]);
 
-	  if (! args.empty()) args += ' ';
-	  args += escape(save_decoded_options[i].canonical_option[j], ' ');
+	  if (! a->empty ()) *a += ' ';
+	  *a += escape (save_decoded_options[i].canonical_option[j], ' ');
 	}
       set->trace ("\n");
     }
 
-  set->next (args);
+  std::string args;
+  std::map<int, std::string>::iterator it;
+  for (it = arg_map.begin (); it != arg_map.end (); ++ it)
+    {
+      if (! args.empty ()) args += ' ';
+      args += it->second;
+    }
+
+  set->next (args, input);
 
   if (! flag_syntax_only)
     {
@@ -86,7 +116,7 @@ static void
 unwind_include (gcj::unit *unit, source_location loc,
 		gcj::source_stack *stack, const char *prefix)
 {
-  assert (loc > BUILTINS_LOCATION);
+  assert (loc != UNKNOWN_LOCATION);
 
   int fid = unit->file_id (LOCATION_FILE (loc));
   stack->add (gcj::source_location (fid));
@@ -95,7 +125,7 @@ unwind_include (gcj::unit *unit, source_location loc,
   linemap_resolve_location (line_table, loc,
 			    LRK_MACRO_EXPANSION_POINT, &m);
 
-  while (! MAIN_FILE_P (m))
+  while (m && ! MAIN_FILE_P (m))
     {
       m = INCLUDED_FROM (line_table, m);
       unit->trace ("  %s, included from %s:%d\n",
@@ -228,23 +258,25 @@ cb_cpp_token (void *arg, void  *data)
   if (stack.macro.length () == 0)
     return;
 
-  set->trace ("cpp_token at %s:%d,%d\n",
+  set->trace ("cpp_token %s at %s:%d,%d\n",
+	      spell ((cpp_token_arg *) arg).c_str (),
 	      LOCATION_FILE (loc), LOCATION_LINE (loc),
 	      LOCATION_COLUMN (loc));
 
   unwind_include (unit, loc, &stack.include, "cpp_token");
 
   gcj::context *ctx = unit->get (unit->include_id (stack.include));
-  gcj::jump_to *to = ctx->jump (build_file_location (loc), 0);
-  assert (to && to->get_expansion ());
+  gcj::jump_to *to = ctx->jump (unit, build_file_location (loc), 0);
+  assert (to && to->exp);
   gcj::source_stack exp (stack.macro);
   std::string token = spell ((cpp_token_arg *) arg);
-  to->get_expansion ()->add (token, exp);
+  unit->get_expansion (to->exp)->add (token, exp);
 }
 
 static void
 build_ref_jump_from (const gcj::file_location& loc,
 		     int len,
+		     const gcj::unit *unit,
 		     gcj::context *ctx, const gcj::macro_stack& stack,
 		     gcj::jump_from *from)
 {
@@ -252,10 +284,10 @@ build_ref_jump_from (const gcj::file_location& loc,
     *from = gcj::jump_from (loc, len);
   else
     {
-      gcj::jump_to *jump_to = ctx->jump (loc, 0);
-      assert (jump_to && jump_to->get_expansion ());
+      gcj::jump_to *jump_to = ctx->jump (unit, loc, 0);
+      assert (jump_to && jump_to->exp);
       gcj::source_stack exp (stack);
-      int id = jump_to->get_expansion ()->id (exp);
+      int id = unit->get_expansion (jump_to->exp)->id (exp);
       *from = gcj::jump_from (loc, 0, id);
     }
 }
@@ -272,9 +304,10 @@ build_ref_jump_to (int include,
   else
     {
       const gcj::context *ctx = unit->get (include);
-      const gcj::jump_to *jump_to = ctx->jump (loc, 0);
-      assert (jump_to && jump_to->get_expansion ());
-      int id = jump_to->get_expansion ()->id (gcj::source_stack (stack));
+      const gcj::jump_to *jump_to = ctx->jump (unit, loc, 0);
+      assert (jump_to && jump_to->exp);
+      const gcj::expansion *exp = unit->get_expansion (jump_to->exp);
+      int id = exp->id (gcj::source_stack (stack));
       *to = gcj::jump_to (include, 0, loc, id);
     }
 }
@@ -309,7 +342,7 @@ cb_external_ref (void *arg, void *data)
   gcj::jump_from jump_from;
   build_ref_jump_from (build_file_location (from_loc),
 		       strlen (IDENTIFIER_POINTER (DECL_NAME (decl))),
-		       ctx, from_stack.macro,
+		       unit, ctx, from_stack.macro,
 		       &jump_from);
 
   gcj::unwind_stack to_stack;
@@ -352,7 +385,7 @@ cb_expand_macro (void *arg, void *data)
   gcj::context *ctx;
   gcj::expansion_point point (iid,
 			      build_source_location (unit, from_loc));
-  int eid = unit->expansion_id (point);
+  int eid = unit->point_id (point);
   if (from_stack.macro.length () == 0)
     ctx = unit->get (iid);
   else
@@ -373,8 +406,9 @@ cb_expand_macro (void *arg, void *data)
 			    strlen (name));
   gcj::jump_to jump_to (unit->include_id (to_stack.include), eid,
 			build_file_location (to_loc),
+			0,
 			from_stack.macro.length () == 0
-			? unit->get_expansion () : NULL);
+			? unit->get_expansion () : 0);
   ctx->add (jump_from, jump_to);
 }
 
@@ -383,7 +417,6 @@ cb_finish (void *, void *data)
 {
   gcj::set *set = (gcj::set *) data;
   set->trace ("finish\n");
-  set->dump (stderr, 0);
   delete set;
 }
 
@@ -399,7 +432,25 @@ plugin_init (plugin_name_args *plugin_info,
       return 1;
     }
 
-  gcj::set *set = new gcj::set;
+  const char *db = NULL;
+  int flags = gcj::SF_LOAD | gcj::SF_SAVE;
+  for (int i = 0; i < plugin_info->argc; ++ i)
+    if (strcmp (plugin_info->argv[i].key, "db") == 0)
+      db = plugin_info->argv[i].value;
+    else if (strcmp (plugin_info->argv[i].key, "overwrite") == 0)
+      flags &= ~gcj::SF_LOAD;
+    else if (strcmp (plugin_info->argv[i].key, "trace") == 0)
+      flags |= gcj::SF_TRACE;
+    else if (strcmp (plugin_info->argv[i].key, "dump") == 0)
+      flags |= gcj::SF_DUMP;
+
+  if (! db)
+    {
+      fprintf (stderr, "Database not specified\n");
+      return 1;
+    }
+
+  gcj::set *set = new gcj::set (db, flags);
 
   set->trace ("hello plugin\n");
   register_callback (plugin_info->base_name,
