@@ -149,6 +149,12 @@ struct file_location
     return line != rhs.line || col != rhs.col;
   }
 
+  bool
+  operator== (const file_location &rhs) const
+  {
+    return line == rhs.line && col == rhs.col;
+  }
+
   int line;
   int col;
 };
@@ -193,8 +199,6 @@ struct source_stack
   source_stack ()
   {
   }
-
-  source_stack (const macro_stack& stack);
 
   bool
   operator< (const source_stack& rhs) const
@@ -332,18 +336,18 @@ struct expansion
   }
 
   void
-  add (const std::string& token, const source_stack& exp)
+  add (const std::string& token, unsigned long long exp)
   {
     tokens.push_back (expanded_token (token, map.get (exp)));
   }
 
   int
-  id (const source_stack& stack) const
+  id (unsigned long long stack) const
   {
     return map.get (stack);
   }
 
-  id_map<source_stack> map;
+  id_map<unsigned long long> map;
   std::vector<expanded_token> tokens;
 };
 
@@ -382,6 +386,14 @@ struct jump_to
     : include (include), point (point), loc (loc),
       expanded_id (expanded_id), exp (0)
   {
+  }
+
+  bool
+  operator== (const jump_to &rhs) const
+  {
+    return include == rhs.include && point == rhs.point
+	   && loc == rhs.loc && expanded_id == rhs.expanded_id
+	   && exp == rhs.exp;
   }
 
   int include;
@@ -427,11 +439,19 @@ struct context
   void
   add (const jump_from& from, const jump_to& to)
   {
-    assert (jumps.insert (std::make_pair (from, to)).second);
+    //assert (jumps.insert (std::make_pair (from, to)).second);
+    if (jumps.find (from) == jumps.end ())
+      jumps.insert (std::make_pair (from, to));
+    else
+      {
+	std::map<jump_from, jump_to>::iterator it = jumps.find (from);
+        assert (it->second == to);
+      }
   }
 
   const jump_to *jump (const unit *unit,
-		       const file_location& loc, int expanded_id) const;
+		       const file_location& loc, int expanded_id,
+		       file_location *begin = NULL) const;
 
   jump_to *
   jump (const unit *unit, const file_location& loc, int expanded_id)
@@ -521,11 +541,7 @@ struct unit
     return (expansion *) ((const unit *) this)->get_expansion (id);
   }
 
-  int
-  file_id (const char *file)
-  {
-    return file_map.get (file);
-  }
+  int file_id (const char *file);
 
   int
   include_id (const source_stack& include)
@@ -533,7 +549,7 @@ struct unit
     int id = include_map.get (include);
     if (input_id == 0
 	&& include.locs.size () == 1
-	&& file_map.at (include.locs.front ().fid) == input)
+	&& include.locs.front ().fid == file_id (input.c_str ()))
       input_id = id;
     return id;
   }

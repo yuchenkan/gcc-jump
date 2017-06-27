@@ -1,4 +1,6 @@
 #include <errno.h>
+#include <limits.h>
+#include <stdlib.h>
 
 #include "gcj.hpp"
 
@@ -17,6 +19,32 @@ escape (const char *str, char c)
 
 namespace gcj
 {
+
+static void
+save_uint64 (FILE *fp, uint64_t v)
+{
+  assert (fwrite (&v, sizeof v, 1, fp) == 1);
+}
+
+static void
+load_uint64 (FILE *fp, uint64_t *v)
+{
+  assert (fread (v, sizeof *v, 1, fp) == 1);
+}
+
+static void
+save_unsigned_long_long (FILE *fp, const unsigned long long& v)
+{
+  save_uint64 (fp, v);
+}
+
+static void
+load_unsigned_long_long (FILE *fp, unsigned long long *v)
+{
+  uint64_t t;
+  load_uint64 (fp, &t);
+  *v = t;
+}
 
 static void
 save_string (FILE *fp, const std::string& str)
@@ -45,13 +73,6 @@ iprintf (FILE *fp, int i, const char *fmt, ...)
   va_start (ap, fmt);
   vfprintf (fp, fmt, ap);
   va_end (ap);
-}
-
-source_stack::source_stack (const macro_stack& stack)
-{
-  std::vector<expansion_point>::const_iterator it;
-  for (it = stack.points.begin (); it != stack.points.end (); ++ it)
-    locs.push_back (it->loc);
 }
 
 static void
@@ -122,7 +143,8 @@ load_expansion_point (FILE *fp, expansion_point *point)
 
 const jump_to *
 context::jump (const unit *unit,
-	       const file_location& loc, int expanded_id) const
+	       const file_location& loc, int expanded_id,
+	       file_location *begin) const
 {
   jump_from from (loc, 0, expanded_id);
   std::map<jump_from, jump_to>::const_iterator it;
@@ -135,16 +157,26 @@ context::jump (const unit *unit,
       && (it->first.loc != loc || it->first.expanded_id != expanded_id))
     goto search_surrounding;
 
+  if (expanded_id == 0 && it->first.expanded_id != 0)
+    {
+      it = jumps.upper_bound (jump_from (it->first.loc, 0, 0));
+      if (it == jumps.begin ())
+	goto search_surrounding;
+      -- it;
+    }
+
   if (expanded_id == 0
       && (it->first.loc.line != loc.line
 	  || it->first.loc.col + it->first.len <= loc.col))
     goto search_surrounding;
 
+  if (expanded_id == 0 && begin)
+    *begin = it->first.loc;
   return &it->second;
 
 search_surrounding:
   if (surrounding)
-    return unit->get (surrounding)->jump (unit, loc, expanded_id);
+    return unit->get (surrounding)->jump (unit, loc, expanded_id, begin);
   else
     return NULL;
 }
@@ -275,6 +307,17 @@ context::load (FILE *fp)
     }
 }
 
+int
+unit::file_id (const char *file)
+{
+  char *full = realpath (file, NULL);
+  if (! full)
+    return file_map.get (file);
+  int id = file_map.get (full);
+  free (full);
+  return id;
+}
+
 void
 unit::dump (FILE *fp, int indet) const
 {
@@ -316,7 +359,7 @@ unit::save (FILE *fp) const
   std::map<int, expansion>::const_iterator exp;
   for (exp = expansions.begin (); exp != expansions.end (); ++ exp)
     {
-      exp->second.map.save (fp, save_source_stack);
+      exp->second.map.save (fp, save_unsigned_long_long);
 
       save_int32 (fp, exp->second.tokens.size ());
       std::vector<expanded_token>::const_iterator tok;
@@ -355,7 +398,7 @@ unit::load (FILE *fp)
   for (int i = 0; i < expansion_size; ++ i)
     {
       expansion *exp = get_expansion (get_expansion ());
-      exp->map.load (fp, load_source_stack);
+      exp->map.load (fp, load_unsigned_long_long);
 
       int32_t tok_size;
       load_int32 (fp, &tok_size);

@@ -258,19 +258,25 @@ cb_cpp_token (void *arg, void  *data)
   if (stack.macro.length () == 0)
     return;
 
-  set->trace ("cpp_token %s at %s:%d,%d\n",
-	      spell ((cpp_token_arg *) arg).c_str (),
+  set->trace ("cpp_token %s, %llu at %s:%d,%d %s:%d,%d\n",
+	      spell ((cpp_token_arg *) arg).c_str (), loc,
 	      LOCATION_FILE (loc), LOCATION_LINE (loc),
-	      LOCATION_COLUMN (loc));
+	      LOCATION_COLUMN (loc),
+	      expand_location_to_spelling_point (loc).file,
+	      expand_location_to_spelling_point (loc).line,
+	      expand_location_to_spelling_point (loc).column);
 
   unwind_include (unit, loc, &stack.include, "cpp_token");
 
   gcj::context *ctx = unit->get (unit->include_id (stack.include));
   gcj::jump_to *to = ctx->jump (unit, build_file_location (loc), 0);
-  assert (to && to->exp);
-  gcj::source_stack exp (stack.macro);
-  std::string token = spell ((cpp_token_arg *) arg);
-  unit->get_expansion (to->exp)->add (token, exp);
+  // TOFIX locations of some tokens expanded from builtin macro
+  // are not accurate
+  if (to && to->exp)
+    {
+      std::string token = spell ((cpp_token_arg *) arg);
+      unit->get_expansion (to->exp)->add (token, loc);
+    }
 }
 
 static void
@@ -278,6 +284,7 @@ build_ref_jump_from (const gcj::file_location& loc,
 		     int len,
 		     const gcj::unit *unit,
 		     gcj::context *ctx, const gcj::macro_stack& stack,
+		     source_location exp,
 		     gcj::jump_from *from)
 {
   if (stack.length () == 0)
@@ -286,7 +293,6 @@ build_ref_jump_from (const gcj::file_location& loc,
     {
       gcj::jump_to *jump_to = ctx->jump (unit, loc, 0);
       assert (jump_to && jump_to->exp);
-      gcj::source_stack exp (stack);
       int id = unit->get_expansion (jump_to->exp)->id (exp);
       *from = gcj::jump_from (loc, 0, id);
     }
@@ -297,6 +303,7 @@ build_ref_jump_to (int include,
 		   const gcj::file_location& loc,
 		   const gcj::unit *unit,
 		   const gcj::macro_stack& stack,
+		   source_location exp,
 		   gcj::jump_to *to)
 {
   if (stack.length () == 0)
@@ -306,8 +313,7 @@ build_ref_jump_to (int include,
       const gcj::context *ctx = unit->get (include);
       const gcj::jump_to *jump_to = ctx->jump (unit, loc, 0);
       assert (jump_to && jump_to->exp);
-      const gcj::expansion *exp = unit->get_expansion (jump_to->exp);
-      int id = exp->id (gcj::source_stack (stack));
+      int id = unit->get_expansion (jump_to->exp)->id (exp);
       *to = gcj::jump_to (include, 0, loc, id);
     }
 }
@@ -342,7 +348,7 @@ cb_external_ref (void *arg, void *data)
   gcj::jump_from jump_from;
   build_ref_jump_from (build_file_location (from_loc),
 		       strlen (IDENTIFIER_POINTER (DECL_NAME (decl))),
-		       unit, ctx, from_stack.macro,
+		       unit, ctx, from_stack.macro, from_loc,
 		       &jump_from);
 
   gcj::unwind_stack to_stack;
@@ -351,7 +357,7 @@ cb_external_ref (void *arg, void *data)
   gcj::jump_to jump_to;
   build_ref_jump_to (unit->include_id (to_stack.include),
 		     build_file_location (to_loc),
-		     unit, to_stack.macro,
+		     unit, to_stack.macro, to_loc,
 		     &jump_to);
 
   ctx->add (jump_from, jump_to);
@@ -373,23 +379,55 @@ cb_expand_macro (void *arg, void *data)
   assert (token->type == CPP_NAME);
   const char *name = (const char *) NODE_NAME (token->val.node.spelling);
 
-  set->trace ("enter_macro %s %s:%d,%d\n",
+  set->trace ("enter_macro %s %s:%d,%d %s:%d,%d\n",
 	      name,
 	      LOCATION_FILE (from_loc), LOCATION_LINE (from_loc),
-	      LOCATION_COLUMN (from_loc));
+	      LOCATION_COLUMN (from_loc),
+	      expand_location_to_spelling_point (from_loc).file,
+	      expand_location_to_spelling_point (from_loc).line,
+	      expand_location_to_spelling_point (from_loc).column);
 
   gcj::unwind_stack from_stack;
   unwind (unit, from_loc, &from_stack, "macro");
 
-  int iid = unit->include_id (from_stack.include);
+  // TOFIX better handle pasting
+  if (token->flags & PASTED)
+    {
+      set->trace ("macro %s results from pasting\n", name);
+      return;
+    }
+
+#if 0
+  source_location spell_loc;
+  spell_loc = linemap_resolve_location (line_table, from_loc,
+					LRK_SPELLING_LOCATION, NULL);
+  gcj::unwind_stack spell_stack;
+  unwind (unit, spell_loc, &spell_stack, "macro_spell");
+
+  // TODO determine token resulted from paste
+  const line_map *m = linemap_lookup (line_table, from_loc);
+  if (linemap_macro_expansion_map_p (m)
+      && spell_loc !=
+	   linemap_resolve_location (line_table,
+				    from_loc,
+				    LRK_MACRO_DEFINITION_LOCATION,
+				    NULL))
+    return;
+
+  if (from_stack.macro.length () == 0)
+    assert (from_loc == spell_loc);
+#endif
+
   gcj::context *ctx;
-  gcj::expansion_point point (iid,
+  gcj::expansion_point point (unit->include_id (from_stack.include),
 			      build_source_location (unit, from_loc));
   int eid = unit->point_id (point);
+
   if (from_stack.macro.length () == 0)
-    ctx = unit->get (iid);
+    ctx = unit->get (unit->include_id (from_stack.include));
   else
-    ctx = unit->get (from_stack.macro.front ()->include, eid);
+    ctx = unit->get (from_stack.macro.front()->include, eid);
+    //ctx = unit->get (unit->include_id (spell_stack.include), eid);
 
   set->trace ("enter_macro_context, macro %s defined at %s:%d,%d\n",
 	      name,

@@ -18,14 +18,17 @@ usage ()
   return 1;
 }
 
-typedef std::map<int, std::string> list_elf_result;
+typedef std::map<std::string, int> list_elf_result;
 
 static bool
-list_elf (const gcj::set *set, const char *elf,
-	  std::map<int, std::string> *result)
+list_elf (const gcj::set *set, const char * /* elf */,
+	  std::map<std::string, int> *result)
 {
   // TODO
-  return false;
+  std::map<int, gcj::unit>::const_iterator it;
+  for (it = set->units.begin (); it != set->units.end (); ++ it)
+    result->insert(std::make_pair (set->unit_map.at (it->first), it->first));
+  return true;
 }
 
 struct select_unit_result
@@ -56,6 +59,7 @@ select_unit (const gcj::set *set, int unit,
 struct expand_result
 {
   const gcj::expansion *expansion;
+  gcj::file_location loc;
 };
 
 static void
@@ -72,10 +76,12 @@ expand (const gcj::set *set,
 	? u->get (include) : u->get (include, point);
 
   const gcj::jump_to *to;
-  to = ctx->jump (u, gcj::file_location (line, col), 0);
+  gcj::file_location begin;
+  to = ctx->jump (u, gcj::file_location (line, col), 0, &begin);
   if (! to) return;
 
   result->expansion = u->get_expansion (to->exp);
+  result->loc = begin;
 }
 
 struct jump_result
@@ -104,6 +110,26 @@ jump (const gcj::set *set,
     result->file = get_file (u, result->to->include);
 }
 
+static void
+print_vim_context (int unit, int include, int point)
+{
+  printf ("{ \"unit\": %d, \"include\": %d, \"point\": %d }",
+	  unit, include, point);
+}
+
+static void
+print_vim_position (int line, int col)
+{
+  printf ("{ \"line\": %d, \"col\": %d }", line, col);
+}
+
+static void
+print_vim_position (int line, int col, int expid)
+{
+  printf ("{ \"line\": %d, \"col\": %d, \"expid\": %d }",
+	  line, col, expid);
+}
+
 static int
 command (const gcj::set *set, const char *cmd,
 	 int argc, const char *argv[])
@@ -117,8 +143,16 @@ command (const gcj::set *set, const char *cmd,
       if (! list_elf (set, argv[0], &result))
 	return 1;
 
-      // TODO
-      return 1;
+      printf ("[ ");
+      list_elf_result::iterator it;
+      for (it = result.begin (); it != result.end (); ++ it)
+	{
+	  if (it != result.begin ()) printf (", ");
+	  printf ("[ \"%s\", %d ]",
+		  escape (it->first.c_str (), '"').c_str (), it->second);
+	}
+      printf (" ]");
+      return 0;
     }
   else if (strcmp (cmd, "select_unit") == 0)
     {
@@ -128,8 +162,14 @@ command (const gcj::set *set, const char *cmd,
       select_unit_result result;
       select_unit (set, unit, &result);
       if (result.include)
-        fprintf (stderr, "selected: %d %s\n",
-		result.include, result.file.c_str ());
+	{
+	  fprintf (stderr, "selected: %d %s\n",
+		   result.include, result.file.c_str ());
+	  printf ("[ \"%s\", ",
+		  escape (result.file.c_str (), '"').c_str ());
+	  print_vim_context (unit, result.include, 0);
+	  printf (" ]");
+	}
       else
 	fprintf (stderr, "none\n");
 
@@ -152,12 +192,24 @@ command (const gcj::set *set, const char *cmd,
 
       if (result.expansion)
 	{
+	  printf ("[ ");
+	  print_vim_position (result.loc.line, result.loc.col);
+	  printf (", [ ");
 	  std::vector<gcj::expanded_token>::const_iterator it;
 	  for (it = result.expansion->tokens.begin ();
 	       it != result.expansion->tokens.end ();
 	       ++ it)
-	    fprintf (stderr, "token: %d %s\n",
-		     it->id, it->token.c_str ());
+	    {
+	      fprintf (stderr, "token: %d %s\n",
+		       it->id, it->token.c_str ());
+
+	      if (it != result.expansion->tokens.begin ())
+		printf (", ");
+	      printf ("[ \"%s\", %d ]",
+		      escape (it->token.c_str (), '"').c_str (),
+		      it->id);
+	    }
+	  printf ("] ]");
 	}
       else
 	fprintf (stderr, "none\n");
@@ -180,11 +232,23 @@ command (const gcj::set *set, const char *cmd,
       jump (set, unit, include, point, line, col, exp,
 	    &result);
       if (result.to)
-	fprintf (stderr, "jump to: %d %d %d %d %d %s\n",
-		 result.to->include, result.to->point,
-		 result.to->loc.line, result.to->loc.col,
-		 result.to->expanded_id,
-		 result.file.c_str ());
+	{
+	  fprintf (stderr, "jump to: %d %d %d %d %d %s\n",
+		   result.to->include, result.to->point,
+		   result.to->loc.line, result.to->loc.col,
+		   result.to->expanded_id,
+		   result.file.c_str ());
+
+	  printf ("[ \"%s\", ",
+		  escape (result.file.c_str (), '"').c_str ());
+	  print_vim_context (unit, result.to->include,
+			     result.to->point);
+	  printf (", ");
+	  print_vim_position (result.to->loc.line,
+			      result.to->loc.col,
+			      result.to->expanded_id);
+	  printf (" ]");
+	}
       else
 	fprintf (stderr, "none\n");
 
