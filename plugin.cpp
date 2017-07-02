@@ -96,9 +96,10 @@ cb_start_unit (void *, void *data)
 
   set->next (args, input);
 
+#if 0
   if (! flag_syntax_only)
     {
-      section * sec;
+      section *sec;
       sec = get_section (".GCJ.plugin",
 			 SECTION_DEBUG
 			 | SECTION_MERGE
@@ -110,6 +111,7 @@ cb_start_unit (void *, void *data)
       ASM_OUTPUT_ASCII (asm_out_file, args.c_str(), args.size());
       ASM_OUTPUT_SKIP (asm_out_file, (unsigned HOST_WIDE_INT) 1);
     }
+#endif
 }
 
 static void
@@ -471,12 +473,10 @@ plugin_init (plugin_name_args *plugin_info,
     }
 
   const char *db = NULL;
-  int flags = gcj::SF_LOAD | gcj::SF_SAVE;
+  int flags = 0;
   for (int i = 0; i < plugin_info->argc; ++ i)
     if (strcmp (plugin_info->argv[i].key, "db") == 0)
       db = plugin_info->argv[i].value;
-    else if (strcmp (plugin_info->argv[i].key, "overwrite") == 0)
-      flags &= ~gcj::SF_LOAD;
     else if (strcmp (plugin_info->argv[i].key, "trace") == 0)
       flags |= gcj::SF_TRACE;
     else if (strcmp (plugin_info->argv[i].key, "dump") == 0)
@@ -484,7 +484,7 @@ plugin_init (plugin_name_args *plugin_info,
 
   if (! db)
     {
-      fprintf (stderr, "Database not specified\n");
+      fprintf (stderr, "GCJ database not specified\n");
       return 1;
     }
 

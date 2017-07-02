@@ -5,6 +5,7 @@
 
 #include <string>
 #include <map>
+#include <set>
 #include <vector>
 #include <list>
 
@@ -481,6 +482,11 @@ struct unit
   {
   }
 
+  unit ()
+    : log (NULL), input_id (0)
+  {
+  }
+
   unit (logger *log)
     : log (log), input_id (0)
   {
@@ -586,63 +592,37 @@ struct unit
 enum set_flag
 {
   SF_TRACE = 1,
-  SF_DUMP = 2,
-  SF_LOAD = 4,
-  SF_SAVE = 8
+  SF_DUMP = 2
 };
 
 struct set
 {
   set (const char *db, int flags)
     : log (stderr, flags & SF_TRACE),
-      db (db), flags (flags), cur (NULL)
+      db (db), dump (flags & SF_DUMP), cur_id (0)
   {
-    if (flags & SF_LOAD)
-      {
-	trace ("load from %s\n", db);
-	load ();
-      }
+    trace ("load from %s\n", db);
+    load ();
   }
 
   ~set ()
   {
-    if (flags & SF_DUMP)
-      dump (stderr, 0);
+    if (cur_id)
+      save_current_unit ();
 
-    if (flags & SF_SAVE)
-      {
-	trace ("save to %s\n", db.c_str ());
-	save ();
-      }
+    trace ("save to %s\n", db.c_str ());
+    save ();
   }
 
-  void
-  next (const std::string& args, const std::string& input)
-  {
-    int id = unit_map.get (args);
-    if (units.find (id) == units.end ())
-      {
-	units.insert (std::make_pair (id, unit (&log, input)));
-	cur = &units.find (id)->second;
-      }
-    else
-      cur = NULL;
-  }
+  void next (const std::string& args, const std::string& input);
 
   unit *
-  current () const
+  current ()
   {
-    return cur;
+    return &cur;
   }
 
-  const unit *
-  get (int id) const
-  {
-    return units.find (id) == units.end ()
-	   ? NULL : &units.find (id)->second;
-  }
-
-  void dump (FILE *fp, int indet) const;
+  void save_current_unit ();
   void save () const;
   void load ();
 
@@ -657,10 +637,29 @@ struct set
 
   logger log;
   std::string db;
-  int flags;
+  bool dump;
+
+  id_map<std::string> unit_map;
+
+  int cur_id;
+  unit cur;
+};
+
+struct set_usr
+{
+  set_usr (const std::string& db)
+    : db(db)
+  {
+    load ();
+  }
+
+  void load ();
+  const unit *get (int id);
+
+  std::string db;
   id_map<std::string> unit_map;
   std::map<int, unit> units;
-  unit *cur;
+  std::set<int> loaded_units;
 };
 
 struct unwind_stack

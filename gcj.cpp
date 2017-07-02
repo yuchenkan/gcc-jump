@@ -1,6 +1,7 @@
-#include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
+
+#include <sstream>
 
 #include "gcj.hpp"
 
@@ -19,6 +20,28 @@ escape (const char *str, char c)
 
 namespace gcj
 {
+
+static std::string
+tostr (int v)
+{
+  std::ostringstream oss;
+  oss << v;
+  return oss.str ();
+}
+
+static std::string
+joinpath (const char *first, ...)
+{
+  std::string p (first);
+  va_list ap;
+  va_start (ap, first);
+  const char *n;
+  while (n = va_arg (ap, char *))
+   p = p + '/' + n;
+  va_end (ap);
+
+  return p;
+}
 
 static void
 save_uint64 (FILE *fp, uint64_t v)
@@ -416,58 +439,88 @@ unit::load (FILE *fp)
   point_map.load (fp, load_expansion_point);
 }
 
-void
-set::dump (FILE *fp, int indet) const
+static std::string
+index_path (const std::string& db)
 {
-  std::map<int, unit>::const_iterator unit;
-  for (unit = units.begin (); unit != units.end (); ++ unit)
+  return joinpath (db.c_str (), "index", NULL);
+}
+
+static std::string
+unit_path (const std::string& db, int id)
+{
+  return joinpath (db.c_str(), "units", tostr (id).c_str (), NULL);
+}
+
+void
+set::next (const std::string& args, const std::string& input)
+{
+  if (cur_id)
+    save_current_unit ();
+
+  cur_id = unit_map.get (args);
+  cur = unit (&log, input);
+}
+
+void
+set::save_current_unit ()
+{
+  if (dump)
     {
-      iprintf (fp, indet, "unit %s:\n",
-	       unit_map.at (unit->first).c_str ());
-      unit->second.dump (fp, indet + 1);
+      fprintf (stderr, "unit %s:\n", unit_map.at (cur_id).c_str ());
+      cur.dump (stderr, 1);
     }
+  FILE *fp = fopen (unit_path (db, cur_id).c_str (), "wb");
+  assert (fp);
+  cur.save (fp);
+  fclose (fp);
 }
 
 void
 set::save () const
 {
-  FILE *fp = fopen (db.c_str (), "wb");
+  FILE *fp = fopen (index_path (db).c_str (), "wb");
   assert (fp);
-
   unit_map.save (fp, save_string);
-
-  save_int32 (fp, units.size ());
-  std::map<int, unit>::const_iterator it;
-  for (it = units.begin (); it != units.end (); ++ it)
-    {
-      save_int32 (fp, it->first);
-      it->second.save (fp);
-    }
-
   fclose (fp);
 }
 
 void
 set::load ()
 {
-  FILE *fp = fopen (db.c_str (), "rb");
-  if (! fp && errno == ENOENT)
+  FILE *fp = fopen (index_path (db).c_str (), "rb");
+  if (! fp)
     return;
-  assert (fp);
-
   unit_map.load (fp, load_string);
+  fclose (fp);
+}
 
-  int32_t size;
-  load_int32 (fp, &size);
-  for (int i = 0; i < size; ++ i)
+void
+set_usr::load ()
+{
+  FILE *fp = fopen (index_path (db).c_str (), "rb");
+  assert (fp);
+  unit_map.load (fp, load_string);
+  fclose (fp);
+
+  for (int i = 1; i <= unit_map.size (); ++ i)
+    units.insert (std::make_pair (i, unit (NULL)));
+}
+
+const unit *
+set_usr::get (int id)
+{
+  if (units.find (id) == units.end ())
+    return NULL;
+
+  if (loaded_units.find (id) == loaded_units.end ())
     {
-      int id;
-      load_int32 (fp, &id);
-      units.insert (std::make_pair (id, unit (&log)));
+      FILE *fp = fopen (unit_path (db, id).c_str (), "rb");
+      assert (fp);
       units.find (id)->second.load (fp);
+      fclose (fp);
     }
 
-  fclose (fp);
+  return &units.find (id)->second;
 }
 
 }
