@@ -4,6 +4,7 @@
 #include <string>
 
 #include "gcj.hpp"
+#include "elf.hpp"
 
 static bool
 to_int (const char *a, int *i)
@@ -21,13 +22,59 @@ usage ()
 typedef std::map<std::string, int> list_elf_result;
 
 static bool
-list_elf (gcj::set_usr *set, const char * /* elf */,
+read_elf (const char *name,
+	  std::set<int> *unit_ids)
+{
+  elf_reader elf;
+  std::string err;
+  std::string sec;
+
+  err = elf.open (name);
+  if (! err.empty ())
+    goto error_out;
+
+  err = elf.read_section (".GCJ.plugin", &sec);
+  if (! err.empty ())
+    goto error_out;
+
+  if (sec.size () % 4)
+    {
+      fprintf (stderr, "invalid gcj section length\n");
+      return false;
+    }
+
+  for (unsigned int i = 0; i < sec.size (); i += 4)
+    unit_ids->insert (elf.get_int (sec.c_str () + i, 4));
+
+  elf.close ();
+  return true;
+
+error_out:
+  elf.close ();
+  fprintf (stderr, "%s\n", err.c_str ());
+  return false;
+}
+
+static bool
+list_elf (gcj::set_usr *set, const char *elf,
 	  std::map<std::string, int> *result)
 {
-  // TODO
-  std::map<int, gcj::unit>::iterator it;
-  for (it = set->units.begin (); it != set->units.end (); ++ it)
-    result->insert(std::make_pair (set->unit_map.at (it->first), it->first));
+  if (elf)
+    {
+      std::set<int> unit_ids;
+      if (! read_elf (elf, &unit_ids))
+	return false;
+      std::set<int>::iterator it;
+      for (it = unit_ids.begin (); it != unit_ids.end (); ++ it)
+	if (set->unit_map.contains (*it))
+	  result->insert(std::make_pair (set->unit_map.at (*it), *it));
+    }
+  else
+    {
+      std::map<int, gcj::unit>::iterator it;
+      for (it = set->units.begin (); it != set->units.end (); ++ it)
+	result->insert(std::make_pair (set->unit_map.at (it->first), it->first));
+    }
   return true;
 }
 
@@ -105,7 +152,7 @@ jump (gcj::set_usr *set,
 	? u->get (include) : u->get (include, point);
   if (! ctx) return;
 
-  result->to = ctx->jump (u, gcj::file_location (line, col), exp);
+  result->to = ctx->jump (u, gcj::file_location (line, col), exp, NULL);
   if (result->to)
     result->file = get_file (u, result->to->include);
 }
@@ -136,11 +183,11 @@ command (gcj::set_usr *set, const char *cmd,
 {
   if (strcmp (cmd, "list_elf") == 0)
     {
-      if (argc != 1)
+      if (argc > 1)
 	return usage ();
 
       list_elf_result result;
-      if (! list_elf (set, argv[0], &result))
+      if (! list_elf (set, argc == 0 ? NULL : argv[0], &result))
 	return 1;
 
       printf ("[ ");

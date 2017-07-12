@@ -9,7 +9,7 @@
 #include <vector>
 #include <list>
 
-std::string escape(const char *str, char c);
+std::string escape(const char *, char);
 
 struct logger
 {
@@ -25,6 +25,13 @@ struct logger
       vfprintf (fp, fmt, ap);
   }
 
+  void
+  vwarning (const char *fmt, va_list ap)
+  {
+    if (enabled)
+      vfprintf (fp, fmt, ap);
+  }
+
   FILE *fp;
   bool enabled;
 };
@@ -33,15 +40,18 @@ namespace gcj
 {
 
 inline void
-save_int32 (FILE *fp, int32_t v)
+save_int32 (FILE *fp, int v)
 {
-  assert (fwrite (&v, sizeof v, 1, fp) == 1);
+  int32_t t = v;
+  assert (fwrite (&t, sizeof t, 1, fp) == 1);
 }
 
 inline void
-load_int32 (FILE *fp, int32_t *v)
+load_int32 (FILE *fp, int *v)
 {
-  assert (fread (v, sizeof *v, 1, fp) == 1);
+  int32_t t;
+  assert (fread (&t, sizeof t, 1, fp) == 1);
+  *v = t;
 }
 
 template <typename type>
@@ -79,6 +89,12 @@ public:
   size () const
   {
     return cur;
+  }
+
+  bool
+  contains (int id) const
+  {
+    return (int) vec.size () >= id;
   }
 
   const type&
@@ -337,18 +353,18 @@ struct expansion
   }
 
   void
-  add (const std::string& token, unsigned long long exp)
+  add (const std::string& token, int exp)
   {
     tokens.push_back (expanded_token (token, map.get (exp)));
   }
 
   int
-  id (unsigned long long stack) const
+  id (int exp) const
   {
-    return map.get (stack);
+    return map.get (exp);
   }
 
-  id_map<unsigned long long> map;
+  id_map<int> map;
   std::vector<expanded_token> tokens;
 };
 
@@ -357,34 +373,34 @@ struct context;
 struct jump_to
 {
   jump_to ()
-    : include (0), point (0), expanded_id (0), exp (0)
+    : unit (0), include (0), point (0), expanded_id (0), exp (0)
   {
   }
 
   jump_to (const jump_to& to)
-    : include (to.include), point (to.point),
+    : unit (to.unit), include (to.include), point (to.point),
       loc (to.loc), expanded_id (to.expanded_id),
       exp (to.exp)
   {
   }
 
-  jump_to (int include, int point,
+  jump_to (int unit, int include, int point,
 	   const file_location& loc)
-    : include (include), point (point), loc (loc),
+    : unit (unit), include (include), point (point), loc (loc),
       expanded_id (0), exp (0)
   {
   }
 
-  jump_to (int include, int point,
+  jump_to (int unit, int include, int point,
 	   const file_location& loc, int, int exp)
-    : include (include), point (point), loc (loc),
+    : unit (unit), include (include), point (point), loc (loc),
       expanded_id (0), exp (exp)
   {
   }
 
-  jump_to (int include, int point,
+  jump_to (int unit, int include, int point,
 	   const file_location& loc, int expanded_id)
-    : include (include), point (point), loc (loc),
+    : unit (unit), include (include), point (point), loc (loc),
       expanded_id (expanded_id), exp (0)
   {
   }
@@ -392,10 +408,13 @@ struct jump_to
   bool
   operator== (const jump_to &rhs) const
   {
-    return include == rhs.include && point == rhs.point
+    return unit == rhs.unit
+	   && include == rhs.include && point == rhs.point
 	   && loc == rhs.loc && expanded_id == rhs.expanded_id
 	   && exp == rhs.exp;
   }
+
+  int unit;
 
   int include;
   int point;
@@ -450,24 +469,57 @@ struct context
       }
   }
 
-  const jump_to *jump (const unit *unit,
-		       const file_location& loc, int expanded_id,
-		       file_location *begin = NULL) const;
+  const jump_to *jump (const unit *, const file_location&, int,
+		       file_location *) const;
 
   jump_to *
   jump (const unit *unit, const file_location& loc, int expanded_id)
   {
-    return (jump_to *) ((const context *) this)->jump (unit, loc, expanded_id);
+    return (jump_to *) ((const context *) this)->jump (unit, loc,
+						       expanded_id,
+						       NULL);
   }
 
-  void dump (FILE *fp, int indet, const unit *unit) const;
-  void save (FILE *fp) const;
-  void load (FILE *fp);
+  void dump (FILE *, int, const unit *) const;
+  void save (FILE *) const;
+  void load (FILE *);
 
   std::map<jump_from, jump_to> jumps;
   int surrounding;
 
   std::map<int, context> expansion_contexts;
+};
+
+struct jump_src
+{
+  jump_src (int include, const jump_from& from)
+    : include (include), from (from)
+  {
+  }
+
+  jump_src (const jump_src& src)
+    : include (src.include), from (src.from)
+  {
+  }
+
+  int include;
+  jump_from from;
+};
+
+struct jump_tgt
+{
+  jump_tgt (const jump_to& to, bool weak)
+    : to (to), weak (weak)
+  {
+  }
+
+  jump_tgt (const jump_tgt& tgt)
+    : to (tgt.to), weak (tgt.weak)
+  {
+  }
+
+  jump_to to;
+  bool weak;
 };
 
 struct unit
@@ -566,9 +618,9 @@ struct unit
     return point_map.get (point);
   }
 
-  void dump (FILE *fp, int indet) const;
-  void save (FILE *fp) const;
-  void load (FILE *fp);
+  void dump (FILE *, int) const;
+  void save (FILE *) const;
+  void load (FILE *);
 
   void
   trace (const char *fmt, ...)
@@ -576,6 +628,15 @@ struct unit
     va_list ap;
     va_start (ap, fmt);
     log->vtrace (fmt, ap);
+    va_end (ap);
+  }
+
+  void
+  warning (const char *fmt, ...)
+  {
+    va_list ap;
+    va_start (ap, fmt);
+    log->vwarning (fmt, ap);
     va_end (ap);
   }
 
@@ -587,6 +648,9 @@ struct unit
   id_map<std::string> file_map;
   id_map<source_stack> include_map;
   id_map<expansion_point> point_map;
+
+  std::map<std::string, std::vector<jump_src> > pub_srcs;
+  std::map<std::string, jump_tgt> pub_tgts;
 };
 
 enum set_flag
@@ -599,7 +663,7 @@ struct set
 {
   set (const char *db, int flags)
     : log (stderr, flags & SF_TRACE),
-      db (db), dump (flags & SF_DUMP), cur_id (0)
+      db (db), dump (flags & SF_DUMP), cur_id (0), cur_data (NULL)
   {
     trace ("load from %s\n", db);
     load ();
@@ -614,12 +678,24 @@ struct set
     save ();
   }
 
-  void next (const std::string& args, const std::string& input);
+  void next (const std::string&, const std::string&);
 
   unit *
   current ()
   {
     return &cur;
+  }
+
+  const unit *
+  current () const
+  {
+    return &cur;
+  }
+
+  int
+  current_id () const
+  {
+    return cur_id;
   }
 
   void save_current_unit ();
@@ -635,6 +711,15 @@ struct set
     va_end (ap);
   }
 
+  void
+  warning (const char *fmt, ...)
+  {
+    va_list ap;
+    va_start (ap, fmt);
+    log.vwarning (fmt, ap);
+    va_end (ap);
+  }
+
   logger log;
   std::string db;
   bool dump;
@@ -643,6 +728,8 @@ struct set
 
   int cur_id;
   unit cur;
+
+  void *cur_data;
 };
 
 struct set_usr
@@ -654,7 +741,7 @@ struct set_usr
   }
 
   void load ();
-  const unit *get (int id);
+  const unit *get (int);
 
   std::string db;
   id_map<std::string> unit_map;
@@ -667,5 +754,12 @@ struct unwind_stack
   macro_stack macro;
   source_stack include;
 };
+
+void add_jump_src (std::map<std::string, std::vector<jump_src> > *srcs,
+		   const std::string& name, int include,
+		   const jump_from& jump_from);
+void add_jump_tgt (std::map<std::string, jump_tgt> *tgts,
+		   const std::string& name,
+		   const jump_to& jump_to, bool weak);
 
 }
