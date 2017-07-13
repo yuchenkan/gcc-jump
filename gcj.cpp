@@ -267,6 +267,7 @@ load_jump_from (FILE *fp, jump_from *from)
 static void
 save_jump_to (FILE *fp, const jump_to& to)
 {
+  save_int32 (fp, to.unit);
   save_int32 (fp, to.include);
   save_int32 (fp, to.point);
   save_file_location (fp, to.loc);
@@ -277,6 +278,7 @@ save_jump_to (FILE *fp, const jump_to& to)
 static void
 load_jump_to (FILE *fp, jump_to *to)
 {
+  load_int32 (fp, &to->unit);
   load_int32 (fp, &to->include);
   load_int32 (fp, &to->point);
   load_file_location (fp, &to->loc);
@@ -586,13 +588,73 @@ unit_path (const std::string& db, int id)
   return joinpath (db.c_str(), "units", tostr (id).c_str (), NULL);
 }
 
+static std::string
+unit_path (const std::string& db, int ld_id, int id)
+{
+  return joinpath (db.c_str(), "units",
+		   (tostr (ld_id) + '.' + tostr (id)).c_str (), NULL);
+}
+
+void
+set_data::save (const std::string& db) const
+{
+  FILE *fp = fopen (index_path (db).c_str (), "wb");
+  assert (fp);
+
+  unit_map.save (fp, save_string);
+  ld_map.save (fp, save_string);
+
+  save_int32 (fp, ld_units.size ());
+  std::map<int, std::set<int> >::const_iterator it;
+  for (it = ld_units.begin (); it != ld_units.end (); ++ it)
+    {
+      save_int32 (fp, it->first);
+      save_int32 (fp, it->second.size ());
+      std::set<int>::const_iterator jt;
+      for (jt = it->second.begin (); jt != it->second.end (); ++ jt)
+	save_int32 (fp, *jt);
+    }
+
+  fclose (fp);
+}
+
+void
+set_data::load (const std::string& db)
+{
+  FILE *fp = fopen (index_path (db).c_str (), "rb");
+  if (! fp)
+    return;
+
+  unit_map.load (fp, load_string);
+  ld_map.load (fp, load_string);
+
+  int size;
+  load_int32 (fp, &size);
+  for (int i = 0; i < size; ++ i)
+    {
+      int ld_id;
+      load_int32 (fp, &ld_id);
+      ld_units.insert (std::make_pair (ld_id, std::set<int> ()));
+      int unit_size;
+      load_int32 (fp, &unit_size);
+      for (int j = 0; j < unit_size; ++ j)
+	{
+	  int id;
+	  load_int32 (fp, &id);
+	  ld_units.find (ld_id)->second.insert (id);
+	}
+    }
+
+  fclose (fp);
+}
+
 void
 set::next (const std::string& args, const std::string& input)
 {
   if (cur_id)
     save_current_unit ();
 
-  cur_id = unit_map.get (args);
+  cur_id = data.unit_map.get (args);
   cur = unit (&log, input);
 }
 
@@ -601,54 +663,116 @@ set::save_current_unit ()
 {
   if (dump)
     {
-      fprintf (stderr, "unit %s:\n", unit_map.at (cur_id).c_str ());
+      fprintf (stderr, "unit %s:\n", data.unit_map.at (cur_id).c_str ());
       cur.dump (stderr, 1);
     }
   FILE *fp = fopen (unit_path (db, cur_id).c_str (), "wb");
   assert (fp);
   cur.save (fp);
   fclose (fp);
+
+  std::map<int, std::set<int> >::iterator it;
+  std::vector<int> rm;
+  for (it = data.ld_units.begin (); it != data.ld_units.end (); ++ it)
+    if (it->second.find (cur_id) != it->second.end ())
+      rm.push_back (it->first);
+  std::vector<int>::iterator jt;
+  for (jt = rm.begin (); jt != rm.end (); ++ jt)
+    data.ld_units.erase (*jt);
 }
 
-void
-set::save () const
+int
+set_usr::get_ld (const char *name, const std::set<int>& units)
 {
-  FILE *fp = fopen (index_path (db).c_str (), "wb");
-  assert (fp);
-  unit_map.save (fp, save_string);
-  fclose (fp);
-}
+  char *full = realpath (name, NULL);
+  if (! full)
+    return 0;
+  int id = data.ld_map.get (std::string (full));
+  free (full);
+  if (data.ld_units.find (id) == data.ld_units.end ())
+    {
+      std::map<std::string, std::vector<std::pair<int, jump_src> > > srcs;
+      std::map<std::string, jump_tgt> tgts;
 
-void
-set::load ()
-{
-  FILE *fp = fopen (index_path (db).c_str (), "rb");
-  if (! fp)
-    return;
-  unit_map.load (fp, load_string);
-  fclose (fp);
-}
+      std::set<int>::const_iterator it;
+      for (it = units.begin (); it != units.end (); ++ it)
+	{
+	  const unit *unit = get (*it);
+	  std::map<std::string, std::vector<jump_src> >::const_iterator jt;
+	  for (jt = unit->pub_srcs.begin ();
+	       jt != unit->pub_srcs.end (); ++ jt)
+	    {
+	      if (srcs.find (jt->first) == srcs.end ())
+		srcs.insert (std::make_pair (jt->first,
+				std::vector<std::pair<int, jump_src> > ()));
 
-void
-set_usr::load ()
-{
-  FILE *fp = fopen (index_path (db).c_str (), "rb");
-  assert (fp);
-  unit_map.load (fp, load_string);
-  fclose (fp);
+	      std::vector<jump_src>::const_iterator kt;
+	      for (kt = jt->second.begin (); kt != jt->second.end (); ++ kt)
+		srcs.find (jt->first)->second.push_back (
+						std::make_pair (*it, *kt));
+	    }
 
-  for (int i = 1; i <= unit_map.size (); ++ i)
-    units.insert (std::make_pair (i, unit (NULL)));
+	  std::map<std::string, jump_tgt>::const_iterator lt;
+	  for (lt = unit->pub_tgts.begin ();
+	       lt != unit->pub_tgts.end (); ++ lt)
+	    {
+	      if (tgts.find (lt->first) == tgts.end ())
+		tgts.insert (std::make_pair (lt->first,
+					     lt->second));
+	      else if (tgts.find (lt->first)->second.weak
+		       && !lt->second.weak)
+		tgts.find (lt->first)->second = lt->second;
+	    }
+	}
+
+      std::map<int, unit> ld_units;
+      std::map<std::string,
+	       std::vector<std::pair<int, jump_src> > >::iterator mt;
+      for (mt = srcs.begin (); mt != srcs.end (); ++ mt)
+	{
+	  if (tgts.find (mt->first) == tgts.end ())
+	    continue;
+
+	  const gcj::jump_to& to = tgts.find (mt->first)->second.to;
+	  std::vector<std::pair<int, jump_src> >::iterator nt;
+	  for (nt = mt->second.begin (); nt != mt->second.end (); ++ nt)
+	    {
+	      if (ld_units.find (nt->first) == ld_units.end ())
+		ld_units.insert (std::make_pair (nt->first, unit (NULL)));
+
+	      unit *unit = &ld_units.find (nt->first)->second;
+	      context *ctx = unit->get (nt->second.include);
+	      ctx->add (nt->second.from, to);
+	    }
+	}
+
+      std::map<int, unit>::iterator ot;
+      for (ot = ld_units.begin (); ot != ld_units.end (); ++ ot)
+	{
+	  FILE *fp = fopen (unit_path (db, id, ot->first).c_str (), "wb");
+	  assert (fp);
+	  ot->second.save (fp);
+	  fclose (fp);
+	}
+
+      data.ld_units.insert (std::make_pair (id, units));
+      data.save (db);
+    }
+  else
+    assert (data.ld_units.find (id)->second == units);
+  return id;
 }
 
 const unit *
 set_usr::get (int id)
 {
-  if (units.find (id) == units.end ())
+  if (id == 0 || id > data.unit_map.size ())
     return NULL;
 
-  if (loaded_units.find (id) == loaded_units.end ())
+  if (units.find (id) == units.end ())
     {
+      units.insert (std::make_pair (id, unit (NULL)));
+
       FILE *fp = fopen (unit_path (db, id).c_str (), "rb");
       assert (fp);
       units.find (id)->second.load (fp);
@@ -658,26 +782,33 @@ set_usr::get (int id)
   return &units.find (id)->second;
 }
 
-void
-add_jump_src (std::map<std::string, std::vector<jump_src> > *srcs,
-	      const std::string& name, int include,
-	      const jump_from& jump_from)
+const unit *
+set_usr::get (int ld_id, int id)
 {
-  if (srcs->find (name) == srcs->end ())
-    srcs->insert (std::make_pair (name, std::vector<jump_src>()));
-  srcs->find (name)->second.push_back (jump_src (include, jump_from));
-}
+  if (ld_id == 0
+      || ld_id > data.ld_map.size ()
+      // This is possible if it's erased by rebuilding unit,
+      // if so, rebuild it by calling get_ld with unit set
+      || data.ld_units.find (ld_id) == data.ld_units.end ()
+      || data.ld_units.find (ld_id)->second.find (id)
+	 == data.ld_units.find (ld_id)->second.end ())
+    return NULL;
 
-void
-add_jump_tgt (std::map<std::string, jump_tgt> *tgts,
-	      const std::string& name,
-	      const jump_to& jump_to, bool weak)
-{
-  if (tgts->find (name) == tgts->end ())
-    tgts->insert (std::make_pair (name, jump_tgt (jump_to, weak)));
-  // We could done more check here
-  else if (tgts->find (name)->second.weak && ! weak)
-    tgts->find (name)->second = jump_tgt (jump_to, weak);
+  if (ld_units.find (ld_id) == ld_units.end ())
+    ld_units.insert (std::make_pair (ld_id, std::map<int, unit> ()));
+
+  if (ld_units.find (ld_id)->second.find (id)
+      == ld_units.find (ld_id)->second.end ())
+    {
+      ld_units.find (ld_id)->second.insert (std::make_pair (id, unit (NULL)));
+
+      FILE *fp = fopen (unit_path (db, ld_id, id).c_str (), "rb");
+      assert (fp);
+      ld_units.find (ld_id)->second.find (id)->second.load (fp);
+      fclose (fp);
+    }
+
+  return &ld_units.find (ld_id)->second.find (id)->second;
 }
 
 }

@@ -9,7 +9,7 @@
 #include <vector>
 #include <list>
 
-std::string escape(const char *, char);
+std::string escape(const char *str, char c);
 
 struct logger
 {
@@ -568,7 +568,7 @@ struct unit
   get (int include, int point) const
   {
     assert (point != 0);
-    return get (include)->expansion (point);
+    return get (include) ? get (include)->expansion (point) : NULL;
   }
 
   context *
@@ -659,6 +659,17 @@ enum set_flag
   SF_DUMP = 2
 };
 
+struct set_data
+{
+  void save (const std::string& db) const;
+  void load (const std::string& db);
+
+  id_map<std::string> unit_map;
+  id_map<std::string> ld_map;
+  // ld_id => unit_id set
+  std::map<int, std::set<int> > ld_units;
+};
+
 struct set
 {
   set (const char *db, int flags)
@@ -666,7 +677,7 @@ struct set
       db (db), dump (flags & SF_DUMP), cur_id (0), cur_data (NULL)
   {
     trace ("load from %s\n", db);
-    load ();
+    data.load (db);
   }
 
   ~set ()
@@ -675,10 +686,10 @@ struct set
       save_current_unit ();
 
     trace ("save to %s\n", db.c_str ());
-    save ();
+    data.save (db);
   }
 
-  void next (const std::string&, const std::string&);
+  void next (const std::string& args, const std::string& input);
 
   unit *
   current ()
@@ -699,8 +710,6 @@ struct set
   }
 
   void save_current_unit ();
-  void save () const;
-  void load ();
 
   void
   trace (const char *fmt, ...)
@@ -724,7 +733,10 @@ struct set
   std::string db;
   bool dump;
 
-  id_map<std::string> unit_map;
+  set_data data;
+/*
+  void ld (const std::string& obj, std::set<int> units);
+*/
 
   int cur_id;
   unit cur;
@@ -737,16 +749,18 @@ struct set_usr
   set_usr (const std::string& db)
     : db(db)
   {
-    load ();
+    data.load (db);
   }
 
-  void load ();
-  const unit *get (int);
+  int get_ld (const char *name, const std::set<int>& units);
+  const unit *get (int id);
+  const unit *get (int ld_id, int id);
 
   std::string db;
-  id_map<std::string> unit_map;
+  set_data data;
   std::map<int, unit> units;
-  std::set<int> loaded_units;
+  // ld_id => unit_id set
+  std::map<int, std::map<int, unit> > ld_units;
 };
 
 struct unwind_stack
@@ -754,12 +768,5 @@ struct unwind_stack
   macro_stack macro;
   source_stack include;
 };
-
-void add_jump_src (std::map<std::string, std::vector<jump_src> > *srcs,
-		   const std::string& name, int include,
-		   const jump_from& jump_from);
-void add_jump_tgt (std::map<std::string, jump_tgt> *tgts,
-		   const std::string& name,
-		   const jump_to& jump_to, bool weak);
 
 }

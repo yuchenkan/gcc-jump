@@ -66,14 +66,14 @@ list_elf (gcj::set_usr *set, const char *elf,
 	return false;
       std::set<int>::iterator it;
       for (it = unit_ids.begin (); it != unit_ids.end (); ++ it)
-	if (set->unit_map.contains (*it))
-	  result->insert(std::make_pair (set->unit_map.at (*it), *it));
+	if (set->data.unit_map.contains (*it))
+	  result->insert(std::make_pair (set->data.unit_map.at (*it), *it));
     }
   else
     {
       std::map<int, gcj::unit>::iterator it;
       for (it = set->units.begin (); it != set->units.end (); ++ it)
-	result->insert(std::make_pair (set->unit_map.at (it->first), it->first));
+	result->insert(std::make_pair (set->data.unit_map.at (it->first), it->first));
     }
   return true;
 }
@@ -137,24 +137,40 @@ struct jump_result
   std::string file;
 };
 
+static bool
+unit_jump (const gcj::unit *unit, gcj::set_usr *set,
+	   int include, int point, int line, int col, int exp,
+	   jump_result *result)
+{
+  if (! unit) return false;
+
+  const gcj::context *ctx;
+  ctx = point == 0
+	? unit->get (include) : unit->get (include, point);
+  if (! ctx) return false;
+
+  result->to = ctx->jump (unit,
+			  gcj::file_location (line, col), exp, NULL);
+  if (result->to)
+    result->file = get_file (set->get (result->to->unit),
+			     result->to->include);
+  return result->to;
+}
+
 static void
 jump (gcj::set_usr *set,
-      int unit, int include, int point, int line, int col, int exp,
+      int ld, int unit, int include, int point, int line, int col, int exp,
       jump_result *result)
 {
   result->to = NULL;
 
-  const gcj::unit *u = set->get (unit);
-  if (! u) return;
+  if (unit_jump (set->get (unit), set,
+		 include, point, line, col, exp, result))
+    return;
 
-  const gcj::context *ctx;
-  ctx = point == 0
-	? u->get (include) : u->get (include, point);
-  if (! ctx) return;
-
-  result->to = ctx->jump (u, gcj::file_location (line, col), exp, NULL);
-  if (result->to)
-    result->file = get_file (u, result->to->include);
+  if (ld)
+    unit_jump (set->get (ld, unit), set,
+	       include, point, line, col, exp, result);
 }
 
 static void
@@ -178,19 +194,35 @@ print_vim_position (int line, int col, int expid)
 }
 
 static int
-command (gcj::set_usr *set, const char *cmd,
+command (const char *db, const char *cmd,
 	 int argc, const char *argv[])
 {
+  gcj::set_usr set (db);
   if (strcmp (cmd, "list_elf") == 0)
     {
       if (argc > 1)
 	return usage ();
 
       list_elf_result result;
-      if (! list_elf (set, argc == 0 ? NULL : argv[0], &result))
+      if (! list_elf (&set, argc == 0 ? NULL : argv[0], &result))
 	return 1;
 
-      printf ("[ ");
+      int ld_id = 0;
+      if (argc != 0)
+	{
+	  std::set<int> units;
+	  list_elf_result::iterator it;
+	  for (it = result.begin (); it != result.end (); ++ it)
+	    units.insert (it->second);
+	  ld_id = set.get_ld (argv[0], units);
+	  if (ld_id == 0)
+	    {
+	      fprintf (stderr, "file not found %s\n", argv[0]);
+	      return 1;
+	    }
+	}
+
+      printf ("[ %d, [ ", ld_id);
       list_elf_result::iterator it;
       for (it = result.begin (); it != result.end (); ++ it)
 	{
@@ -198,7 +230,7 @@ command (gcj::set_usr *set, const char *cmd,
 	  printf ("[ \"%s\", %d ]",
 		  escape (it->first.c_str (), '"').c_str (), it->second);
 	}
-      printf (" ]");
+      printf (" ] ]");
       return 0;
     }
   else if (strcmp (cmd, "select_unit") == 0)
@@ -207,7 +239,7 @@ command (gcj::set_usr *set, const char *cmd,
       if (argc != 1 || ! to_int (argv[0], &unit))
 	return usage ();
       select_unit_result result;
-      select_unit (set, unit, &result);
+      select_unit (&set, unit, &result);
       if (result.include)
 	{
 	  fprintf (stderr, "selected: %d %s\n",
@@ -234,7 +266,7 @@ command (gcj::set_usr *set, const char *cmd,
 	return usage ();
 
       expand_result result;
-      expand (set, unit, include, point, line, col,
+      expand (&set, unit, include, point, line, col,
 	      &result);
 
       if (result.expansion)
@@ -265,18 +297,19 @@ command (gcj::set_usr *set, const char *cmd,
     }
   else if (strcmp (cmd, "jump") == 0)
     {
-      int unit, include, point, line, col, exp;
-      if (argc != 6
-	  || ! to_int (argv[0], &unit)
-	  || ! to_int (argv[1], &include)
-	  || ! to_int (argv[2], &point)
-	  || ! to_int (argv[3], &line)
-	  || ! to_int (argv[4], &col)
-	  || ! to_int (argv[5], &exp))
+      int ld, unit, include, point, line, col, exp;
+      if (argc != 7
+	  || ! to_int (argv[0], &ld)
+	  || ! to_int (argv[1], &unit)
+	  || ! to_int (argv[2], &include)
+	  || ! to_int (argv[3], &point)
+	  || ! to_int (argv[4], &line)
+	  || ! to_int (argv[5], &col)
+	  || ! to_int (argv[6], &exp))
 	return usage ();
 
       jump_result result;
-      jump (set, unit, include, point, line, col, exp,
+      jump (&set, ld, unit, include, point, line, col, exp,
 	    &result);
       if (result.to)
 	{
@@ -320,6 +353,5 @@ main (int argc, const char *argv[])
   int cmd_argc = argc - 3;
   const char **cmd_argv = argv + 3;
 
-  gcj::set_usr set (db);
-  return command (&set, cmd, cmd_argc, cmd_argv);
+  return command (db, cmd, cmd_argc, cmd_argv);
 }

@@ -68,14 +68,14 @@ function s:SetContext(edit, filename, context)
   endif
 
   call system("mkdir -p " . s:ctx . fnamemodify(filename, ":p:h"))
-  let sctx = a:context.unit . "." . a:context.include . "." . a:context.point
+  let sctx = a:context.ld . "." . a:context.unit . "." . a:context.include . "." . a:context.point
   let ext = fnamemodify(filename, ":e")
   let link = s:ctx . fnamemodify(filename, ":r") . "." . sctx . "." . ext
   " Using cp instead of a real link because vim can't handle well with the different
   " file names pointing to the same inode
   call system("rm -f " . link)
   call system("cp " . fnamemodify(filename, ":p") . " " . link)
-  call system("echo -n '[ " . a:context.unit . ", " . a:context.include . ", " . a:context.point . "]' > " . link . ".gcj.ctx")
+  call system("echo -n '[ " . a:context.ld . ", " . a:context.unit . ", " . a:context.include . ", " . a:context.point . "]' > " . link . ".gcj.ctx")
   execute a:edit . " " . link
 endfunction
 
@@ -85,7 +85,7 @@ endfunction
 
 function s:GetContext()
   let ctx = eval(system("cat " . s:BufName() . ".gcj.ctx"))
-  return { "unit": ctx[0], "include": ctx[1], "point": ctx[2] }
+  return { "ld": ctx[0], "unit": ctx[1], "include": ctx[2], "point": ctx[3] }
 endfunction
 
 function s:Jump()
@@ -110,7 +110,7 @@ function s:Jump()
     let expid = 0
   endif
 
-  let sctx = ctx.unit . " " . ctx.include . " " . ctx.point
+  let sctx = ctx.ld . " " . ctx.unit . " " . ctx.include . " " . ctx.point
   let spos = pos.line . " " . pos.col . " " . expid
   let sjmp = s:Gcj("jump " . sctx . " " . spos)
 
@@ -119,6 +119,7 @@ function s:Jump()
   endif
 
   let [ filename, context, newpos ] = eval(sjmp)
+  let context.ld = ctx.ld
   if exists("exp")
     let winnr = s:FindExpWin(exp.parent)
     if winnr != -1
@@ -198,7 +199,8 @@ endfunction
 
 function s:SelectUnit()
 
-  let sel = s:Gcj("select_unit " . b:gcj_units[line(".") - 1][1])
+  let ld = b:gcj_units[0]
+  let sel = s:Gcj("select_unit " . b:gcj_units[1][line(".") - 1][1])
 
   if sel == ''
     echom "Gcj unit not found in database " . s:db
@@ -206,6 +208,7 @@ function s:SelectUnit()
   endif
 
   let [ filename, context ] = eval(sel)
+  let context.ld = ld
 
   for winnr in range(1, winnr('$'))
 
@@ -234,7 +237,7 @@ function s:SelectUnit()
 
   execute maxnr . "wincmd w"
   let height = max([ 0, winheight(0) - 5 ])
-  call s:SetContext("below " . height . "split", filename, context)
+  call s:SetContext("below " . height . "split", filename, ld, context)
 
 endfunction
 
@@ -256,8 +259,8 @@ function s:SetObject(...)
     return
   endif
 
-  if len(units) == 0
-    echom "No gcj unit found in object file" . a:name
+  if len(units[1]) == 0
+    echom "No gcj unit found in object file"
     return
   endif
 
@@ -272,11 +275,11 @@ function s:SetObject(...)
   setlocal nowrap
   nnoremap <buffer> <CR> :call <SID>SelectUnit()<CR>
 
-  sort(units)
+  sort(units[1])
   let b:gcj_units = units
 
-  for i in range(len(b:gcj_units))
-    call setline(i + 1, b:gcj_units[i][0])
+  for i in range(len(b:gcj_units[1]))
+    call setline(i + 1, b:gcj_units[1][i][0])
   endfor
 
   setlocal nomodifiable

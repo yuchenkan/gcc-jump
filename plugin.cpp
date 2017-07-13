@@ -323,11 +323,11 @@ lex_token (gcj::set *set,
   // TOFIX locations of some tokens expanded from builtin macro
   // are not accurate
   else
-    set->warning("token expanded with inaccurate location"
-		 "cpp_token %s, at %s:%d,%d",
-		 token.c_str (),
-		 LOCATION_FILE (loc), LOCATION_LINE (loc),
-		 LOCATION_COLUMN (loc));
+    set->warning ("token expanded with inaccurate location"
+		  "cpp_token %s, at %s:%d,%d",
+	 	  token.c_str (),
+		  LOCATION_FILE (loc), LOCATION_LINE (loc),
+		  LOCATION_COLUMN (loc));
 }
 
 static void
@@ -353,10 +353,12 @@ build_ref_jump_from (source_location loc, int len,
 
 static void
 build_ref_jump_to (int unit_id, const gcj::unwind_stack& stack,
-		   source_location loc, gcj::unit *unit,
+		   source_location loc, gcj::set *set,
 		   gcj::jump_to *to)
 {
   gcj::file_location file_loc (build_file_location (loc));
+  gcj::unit *unit = set->current ();
+  const plug_data *plug = (plug_data *) set->cur_data;
   int include = unit->include_id (stack.include);
   if (stack.macro.length () == 0)
     *to = gcj::jump_to (unit_id, include, 0, file_loc);
@@ -365,7 +367,8 @@ build_ref_jump_to (int unit_id, const gcj::unwind_stack& stack,
       const gcj::context *ctx = unit->get (include);
       const gcj::jump_to *jump_to = ctx->jump (unit, file_loc, 0, NULL);
       assert (jump_to && jump_to->exp);
-      int id = unit->get_expansion (jump_to->exp)->id (loc);
+      int expid = plug->exp_map.get (loc);
+      int id = unit->get_expansion (jump_to->exp)->id (expid);
       *to = gcj::jump_to (unit_id, include, 0, file_loc, id);
     }
 }
@@ -404,7 +407,7 @@ build_ref (gcj::set *set, const_tree ref, source_location loc)
 
   gcj::jump_to jump_to;
   build_ref_jump_to (set->current_id (), to_stack,
-		     to_loc, unit, &jump_to);
+		     to_loc, set, &jump_to);
 
   ctx->add (jump_from, jump_to);
 }
@@ -463,8 +466,10 @@ expand_macro (gcj::set *set, const cpp_token *token,
 			    ? build_file_location (from_loc)
 			    : from_stack.macro.front ()->loc.loc,
 			    strlen (name));
-  gcj::jump_to jump_to (set->current_id (),
-			unit->include_id (to_stack.include), eid,
+  int to_include = unit->include_id (to_stack.include);
+  // Touch the context so it gets surrounding
+  unit->get (to_include, eid);
+  gcj::jump_to jump_to (set->current_id (), to_include, eid,
 			build_file_location (to_loc),
 			0,
 			from_stack.macro.length () == 0
@@ -585,7 +590,7 @@ resolve_tags (gcj::set *set, plug_data *plug)
 
       gcj::jump_to jump_to;
       build_ref_jump_to (set->current_id (), to_stack,
-			 kt->second, unit, &jump_to);
+			 kt->second, set, &jump_to);
       ctx->add (jump_from, jump_to);
       tos.insert (std::make_pair (kt->second, jump_to));
     }
@@ -629,6 +634,28 @@ cb_build_gcc_jump (void *arg, void *data)
 }
 
 static void
+add_jump_src (std::map<std::string, std::vector<gcj::jump_src> > *srcs,
+	      const std::string& name, int include,
+	      const gcj::jump_from& jump_from)
+{
+  if (srcs->find (name) == srcs->end ())
+    srcs->insert (std::make_pair (name, std::vector<gcj::jump_src> ()));
+  srcs->find (name)->second.push_back (gcj::jump_src (include, jump_from));
+}
+
+static void
+add_jump_tgt (std::map<std::string, gcj::jump_tgt> *tgts,
+	      const std::string& name,
+	      const gcj::jump_to& jump_to, bool weak)
+{
+  if (tgts->find (name) == tgts->end ())
+    tgts->insert (std::make_pair (name, gcj::jump_tgt (jump_to, weak)));
+  // We could done more check here
+  else if (tgts->find (name)->second.weak && ! weak)
+    tgts->find (name)->second = gcj::jump_tgt (jump_to, weak);
+}
+
+static void
 add_declaration (gcj::set *set, tree decl)
 {
   gcj::unit *unit = set->current ();
@@ -647,8 +674,8 @@ add_declaration (gcj::set *set, tree decl)
   build_ref_jump_from (loc, strlen (name), set,
 		       unit->get (include), stack.macro, &jump_from);
 
-  gcj::add_jump_src (TREE_PUBLIC (decl) ? &unit->pub_srcs : &plug->srcs,
-		     name, include, jump_from);
+  add_jump_src (TREE_PUBLIC (decl) ? &unit->pub_srcs : &plug->srcs,
+		name, include, jump_from);
 }
 
 static void
@@ -667,10 +694,10 @@ add_definition (gcj::set *set, tree decl)
   unwind (unit, loc, &stack, "add_decl");
 
   gcj::jump_to jump_to;
-  build_ref_jump_to (unit_id, stack, loc, unit, &jump_to);
+  build_ref_jump_to (unit_id, stack, loc, set, &jump_to);
 
-  gcj::add_jump_tgt (TREE_PUBLIC (decl) ? &unit->pub_tgts : &plug->tgts,
-		     name, jump_to, DECL_WEAK (decl));
+  add_jump_tgt (TREE_PUBLIC (decl) ? &unit->pub_tgts : &plug->tgts,
+		name, jump_to, DECL_WEAK (decl));
 }
 
 static void
