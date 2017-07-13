@@ -734,9 +734,6 @@ struct set
   bool dump;
 
   set_data data;
-/*
-  void ld (const std::string& obj, std::set<int> units);
-*/
 
   int cur_id;
   unit cur;

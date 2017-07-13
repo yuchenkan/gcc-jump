@@ -67,13 +67,12 @@ list_elf (gcj::set_usr *set, const char *elf,
       std::set<int>::iterator it;
       for (it = unit_ids.begin (); it != unit_ids.end (); ++ it)
 	if (set->data.unit_map.contains (*it))
-	  result->insert(std::make_pair (set->data.unit_map.at (*it), *it));
+	  result->insert (std::make_pair (set->data.unit_map.at (*it), *it));
     }
   else
     {
-      std::map<int, gcj::unit>::iterator it;
-      for (it = set->units.begin (); it != set->units.end (); ++ it)
-	result->insert(std::make_pair (set->data.unit_map.at (it->first), it->first));
+      for (int id = 1; id <= set->data.unit_map.size (); ++ id)
+	result->insert (std::make_pair (set->data.unit_map.at (id), id));
     }
   return true;
 }

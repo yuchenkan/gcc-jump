@@ -14,9 +14,9 @@ function s:Gcj(command)
   return system(cmd . " 2> /dev/null")
 endfunction
 
-function s:FindExpWin(id)
+function s:FindWin(name, id)
   for winnr in range(1, winnr("$"))
-    if getwinvar(winnr, "gcj_exp_win_id") == a:id
+    if getwinvar(winnr, a:name) == a:id
       return winnr
     endif
   endfor
@@ -57,7 +57,7 @@ function s:GetExpTok()
 endfunction
 
 function s:BufName()
-  return expand('%:p')
+  return expand("%:p")
 endfunction
 
 function s:SetContext(edit, filename, context)
@@ -76,6 +76,7 @@ function s:SetContext(edit, filename, context)
   call system("rm -f " . link)
   call system("cp " . fnamemodify(filename, ":p") . " " . link)
   call system("echo -n '[ " . a:context.ld . ", " . a:context.unit . ", " . a:context.include . ", " . a:context.point . "]' > " . link . ".gcj.ctx")
+  echom link
   execute a:edit . " " . link
 endfunction
 
@@ -106,7 +107,7 @@ function s:Jump()
     endif
   else
     let ctx = s:GetContext()
-    let pos = { 'line': line("."), 'col': col(".") }
+    let pos = { "line": line("."), "col": col(".") }
     let expid = 0
   endif
 
@@ -114,14 +115,14 @@ function s:Jump()
   let spos = pos.line . " " . pos.col . " " . expid
   let sjmp = s:Gcj("jump " . sctx . " " . spos)
 
-  if sjmp == ''
+  if sjmp == ""
     return
   endif
 
   let [ filename, context, newpos ] = eval(sjmp)
   let context.ld = ctx.ld
   if exists("exp")
-    let winnr = s:FindExpWin(exp.parent)
+    let winnr = s:FindWin("gcj_exp_win_id", exp.parent)
     if winnr != -1
       execute winnr . "wincmd w"
     endif
@@ -163,7 +164,7 @@ function s:Expand()
   let spos = line(".") . " " . col(".")
   let sexp = s:Gcj("expand " . sctx . " " . spos)
 
-  if sexp == ''
+  if sexp == ""
     return
   endif
 
@@ -202,7 +203,7 @@ function s:SelectUnit()
   let ld = b:gcj_units[0]
   let sel = s:Gcj("select_unit " . b:gcj_units[1][line(".") - 1][1])
 
-  if sel == ''
+  if sel == ""
     echom "Gcj unit not found in database " . s:db
     return
   endif
@@ -210,12 +211,24 @@ function s:SelectUnit()
   let [ filename, context ] = eval(sel)
   let context.ld = ld
 
-  for winnr in range(1, winnr('$'))
+  if exists("w:gcj_obj_win_id")
+    let winnr = s:FindWin("gcj_obj_unit_win_id", w:gcj_obj_win_id)
+    if winnr != -1
+      execute winnr . "wincmd w"
+      call s:SetContext("edit", filename, context)
+      return
+    endif
+  endif
+
+  for winnr in range(1, winnr("$"))
 
     let bufnr = winbufnr(winnr)
 
     execute winnr . "wincmd w"
-    if !exists("b:gcj_units") && (&mod == 0 || bufwinnr(bufnr) != winnr)
+    if !exists("b:gcj_units")
+       && !exists("w:gcj_obj_win_id")
+       && !exists("w:gcj_exp_win_id")
+       && !exists("b::gcj_expansion") && (&mod == 0 || bufwinnr(bufnr) != winnr)
       call s:SetContext("edit", filename, context)
       return
     endif
@@ -225,7 +238,7 @@ function s:SelectUnit()
   let maxnr = 1
   let maxarea = winwidth(1) * winheight(1)
 
-  for winnr in range(2, winnr('$'))
+  for winnr in range(2, winnr("$"))
 
     let area = winwidth(winnr) * winheight(winnr)
     if area > maxarea
@@ -241,6 +254,7 @@ function s:SelectUnit()
 
 endfunction
 
+let s:obj_win_id = 0
 function s:SetObject(...)
 
   if a:0 == 0
@@ -265,7 +279,22 @@ function s:SetObject(...)
   endif
 
   if !exists("b:gcj_units")
-    5new
+    if exists("w:gcj_obj_unit_win_id")
+      let id = w:gcj_obj_unit_win_id
+      let winnr = s:FindWin("gcj_obj_win_id", id)
+      if winnr != -1
+	execute winnr . "wincmd w"
+	enew
+      else
+	5new
+	let w:gcj_obj_win_id = id
+      endif
+    else
+      let s:obj_win_id += 1
+      let w:gcj_obj_unit_win_id = s:obj_win_id
+      5new
+      let w:gcj_obj_win_id = s:obj_win_id
+    endif
   else
     enew
   endif
