@@ -76,7 +76,6 @@ function s:SetContext(edit, filename, context)
   call system("rm -f " . link)
   call system("cp " . fnamemodify(filename, ":p") . " " . link)
   call system("echo -n '[ " . a:context.ld . ", " . a:context.unit . ", " . a:context.include . ", " . a:context.point . "]' > " . link . ".gcj.ctx")
-  echom link
   execute a:edit . " " . link
 endfunction
 

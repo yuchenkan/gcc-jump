@@ -320,7 +320,7 @@ command (const char *db, const char *cmd,
 
 	  printf ("[ \"%s\", ",
 		  escape (result.file.c_str (), '"').c_str ());
-	  print_vim_context (unit, result.to->include,
+	  print_vim_context (result.to->unit, result.to->include,
 			     result.to->point);
 	  printf (", ");
 	  print_vim_position (result.to->loc.line,
