@@ -435,6 +435,12 @@ expand_macro (gcj::set *set, const cpp_token *token,
   gcj::unwind_stack from_stack;
   unwind (unit, from_loc, &from_stack, "macro");
 
+  source_location spell_loc;
+  spell_loc = linemap_resolve_location (line_table, from_loc,
+                                       LRK_SPELLING_LOCATION, NULL);
+  gcj::unwind_stack spell_stack;
+  unwind (unit, spell_loc, &spell_stack, "macro_spell");
+
   // TOFIX better handle pasting
   if (token->flags & PASTED)
     {
@@ -448,10 +454,20 @@ expand_macro (gcj::set *set, const cpp_token *token,
   int eid = unit->point_id (point);
 
   if (from_stack.macro.length () == 0)
+    assert (from_loc == spell_loc);
+
+  // Use spell_loc instead of from_stack.macro.front() to handle
+  //   #define A(a) a
+  //   #define B(a) a
+  //   #define M(t, a) t(a)
+  //   #define E (M(A, 0), M(B, 0))
+  //   E
+  // in which case, from_stack.macro.front() both are t(a)
+  if (from_stack.macro.length () == 0)
     ctx = unit->get (unit->include_id (from_stack.include));
   else
-    ctx = unit->get (from_stack.macro.front()->include, eid);
-    //ctx = unit->get (unit->include_id (spell_stack.include), eid);
+    //ctx = unit->get (from_stack.macro.front()->include, eid);
+    ctx = unit->get (unit->include_id (spell_stack.include), eid);
 
   set->trace ("enter_macro_context, macro %s defined at %s:%d,%d\n",
 	      name,
@@ -462,9 +478,9 @@ expand_macro (gcj::set *set, const cpp_token *token,
   unwind (unit, to_loc, &to_stack, "define");
   assert (to_stack.macro.length () == 0);
 
-  gcj::jump_from jump_from (from_stack.macro.length () == 0
-			    ? build_file_location (from_loc)
-			    : from_stack.macro.front ()->loc.loc,
+  gcj::jump_from jump_from (build_file_location (
+			      from_stack.macro.length () == 0
+			      ? from_loc : spell_loc),
 			    strlen (name));
   int to_include = unit->include_id (to_stack.include);
   // Touch the context so it gets surrounding
