@@ -1,12 +1,12 @@
 let s:bin = "/home/chenkan/work/gcc-jump/src/gcj"
-"let s:db = "/home/chenkan/work/gcc-jump/test/.test/db"
-"let s:ctx = "/home/chenkan/work/gcc-jump/test/.test/ctx"
+let s:db = "/home/chenkan/work/gcc-jump/test/.test/db"
+let s:ctx = "/home/chenkan/work/gcc-jump/test/.test/ctx"
 "let s:db = "/home/chenkan/work/gcc-jump/test/.run.binutils-gdb/db"
 "let s:ctx = "/home/chenkan/work/gcc-jump/test/.run.binutils-gdb/ctx"
 "let s:db = "/home/chenkan/work/gcc-jump/test/.run.glibc/db"
 "let s:ctx = "/home/chenkan/work/gcc-jump/test/.run.glibc/ctx"
-let s:db = "/home/chenkan/work/gcc-jump/test/.run.linux/db"
-let s:ctx = "/home/chenkan/work/gcc-jump/test/.run.linux/ctx"
+"let s:db = "/home/chenkan/work/gcc-jump/test/.run.linux/db"
+"let s:ctx = "/home/chenkan/work/gcc-jump/test/.run.linux/ctx"
 
 call system("mkdir -p " . s:ctx)
 

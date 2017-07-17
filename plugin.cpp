@@ -485,11 +485,15 @@ expand_macro (gcj::set *set, const cpp_token *token,
   int to_include = unit->include_id (to_stack.include);
   // Touch the context so it gets surrounding
   unit->get (to_include, eid);
+
+  int exp = 0;
+  if (from_stack.macro.length () == 0)
+    exp = ctx->jumps.find (jump_from) != ctx->jumps.end ()
+	    ? ctx->jumps.find (jump_from)->second.exp
+	    : unit->get_expansion ();
   gcj::jump_to jump_to (set->current_id (), to_include, eid,
 			build_file_location (to_loc),
-			0,
-			from_stack.macro.length () == 0
-			? unit->get_expansion () : 0);
+			0, exp);
   ctx->add (jump_from, jump_to);
 }
 
