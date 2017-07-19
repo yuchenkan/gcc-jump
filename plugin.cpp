@@ -478,15 +478,15 @@ expand_macro (gcj::set *set, const cpp_token *token,
   unwind (unit, to_loc, &to_stack, "define");
   assert (to_stack.macro.length () == 0);
 
-  gcj::jump_from jump_from (build_file_location (
-			      from_stack.macro.length () == 0
-			      ? from_loc : spell_loc),
+  gcj::jump_from jump_from (build_file_location (spell_loc),
 			    strlen (name));
   int to_include = unit->include_id (to_stack.include);
   // Touch the context so it gets surrounding
   unit->get (to_include, eid);
 
   int exp = 0;
+  // Outmost macros probably shall not be expanded more than
+  // once, but it does happen when compiling a linux-kernel
   if (from_stack.macro.length () == 0)
     exp = ctx->jumps.find (jump_from) != ctx->jumps.end ()
 	    ? ctx->jumps.find (jump_from)->second.exp
