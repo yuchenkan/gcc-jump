@@ -1,12 +1,12 @@
 let s:bin = "/home/chenkan/work/gcc-jump/src/gcj"
 "let s:db = "/home/chenkan/work/gcc-jump/test/.test/db"
 "let s:ctx = "/home/chenkan/work/gcc-jump/test/.test/ctx"
-"let s:db = "/home/chenkan/work/gcc-jump/test/.run.binutils-gdb/db"
-"let s:ctx = "/home/chenkan/work/gcc-jump/test/.run.binutils-gdb/ctx"
-"let s:db = "/home/chenkan/work/gcc-jump/test/.run.glibc/db"
-"let s:ctx = "/home/chenkan/work/gcc-jump/test/.run.glibc/ctx"
-let s:db = "/home/chenkan/work/gcc-jump/test/.run.linux/db"
-let s:ctx = "/home/chenkan/work/gcc-jump/test/.run.linux/ctx"
+"let s:db = "/home/chenkan/data/gcc-jump/run.binutils-gdb/db"
+"let s:ctx = "/home/chenkan/data/gcc-jump/run.binutils-gdb/ctx"
+let s:db = "/home/chenkan/data/gcc-jump/run.glibc/db"
+let s:ctx = "/home/chenkan/data/gcc-jump/run.glibc/ctx"
+"let s:db = "/home/chenkan/data/gcc-jump/run.linux.uml/db"
+"let s:ctx = "/home/chenkan/data/gcc-jump/run.linux.uml/ctx"
 
 call system("mkdir -p " . s:ctx)
 
@@ -46,7 +46,7 @@ function s:GetExpTok()
 
   let col = col(".")
   let layout = b:gcj_expansion.layout
-  for i in range(1, len(layout))
+  for i in range(1, len(layout) - 1)
     if layout[i][0] > col
       if layout[i][0] - 1 == col
         return 0
