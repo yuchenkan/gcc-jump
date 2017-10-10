@@ -1,5 +1,5 @@
 # gcc-jump
-C code explorer implemented by gcc-plugin, used as vim-plugin. 
+C code explorer implemented with gcc-plugin, used as vim-plugin. 
 
 Use with:
 1. download gcc source code
