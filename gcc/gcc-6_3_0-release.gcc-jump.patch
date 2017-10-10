@@ -1,0 +1,1169 @@
+diff --git a/gcc/c-family/c-common.h b/gcc/c-family/c-common.h
+index dd74d0d..96d041d 100644
+--- a/gcc/c-family/c-common.h
++++ b/gcc/c-family/c-common.h
+@@ -1467,4 +1467,55 @@ extern bool reject_gcc_builtin (const_tree, location_t = UNKNOWN_LOCATION);
+ extern void warn_duplicated_cond_add_or_warn (location_t, tree, vec<tree> **);
+ extern bool valid_array_size_p (location_t, tree, tree);
+ 
++enum build_gcc_jump_type
++{
++  GCC_JUMP_LEX_TOKEN,
++  GCC_JUMP_BUILD_REF,
++  GCC_JUMP_EXPAND_MACRO,
++  GCC_JUMP_STACK_FILE,
++  GCC_JUMP_REF_TAG,
++  GCC_JUMP_REF_START_TAG
++};
++
++struct build_gcc_jump_arg
++{
++  build_gcc_jump_type type;
++  union
++    {
++      struct
++      {
++	ENUM_BITFIELD (cpp_ttype) type : 8;
++	//ENUM_BITFIELD (pragma_kind) pragma_kind : 8;
++	const_tree value;
++	source_location loc;
++      } lex_token;
++
++      struct
++      {
++	const_tree ref;
++	source_location loc;
++      } build_ref;
++
++      struct
++      {
++	const cpp_token *token;
++	source_location loc;
++	source_location macro_loc;
++      } expand_macro;
++
++      struct
++      {
++	source_location loc;
++	const char *file;
++      } stack_file;
++
++      struct
++      {
++	const_tree name;
++	source_location loc;
++	source_location ref_loc;
++      } ref_tag;
++    } u;
++};
++
+ #endif /* ! GCC_C_COMMON_H */
+diff --git a/gcc/c-family/c-lex.c b/gcc/c-family/c-lex.c
+index 96da4fc..e2691f7 100644
+--- a/gcc/c-family/c-lex.c
++++ b/gcc/c-family/c-lex.c
+@@ -27,8 +27,10 @@ along with GCC; see the file COPYING3.  If not see
+ #include "stor-layout.h"
+ #include "c-pragma.h"
+ #include "debug.h"
++#include "plugin.h"
+ 
+ #include "attribs.h"
++#include "cpp-id-data.h"
+ 
+ /* We may keep statistics about how long which files took to compile.  */
+ static int header_time, body_time;
+@@ -55,6 +57,9 @@ static void cb_ident (cpp_reader *, unsigned int, const cpp_string *);
+ static void cb_def_pragma (cpp_reader *, unsigned int);
+ static void cb_define (cpp_reader *, unsigned int, cpp_hashnode *);
+ static void cb_undef (cpp_reader *, unsigned int, cpp_hashnode *);
++static void cb_enter_macro (cpp_reader *, cpp_hashnode *,
++			    const cpp_token *, source_location);
++static void cb_stack_file (cpp_reader *, source_location, const char *);
+ 
+ void
+ init_c_lex (void)
+@@ -90,6 +95,9 @@ init_c_lex (void)
+       cb->define = cb_define;
+       cb->undef = cb_undef;
+     }
++
++  cb->enter_macro = cb_enter_macro;
++  cb->stack_file = cb_stack_file;
+ }
+ 
+ struct c_fileinfo *
+@@ -278,6 +286,61 @@ cb_undef (cpp_reader * ARG_UNUSED (pfile), source_location loc,
+ 			 (const char *) NODE_NAME (node));
+ }
+ 
++static void
++cb_enter_macro (cpp_reader *, cpp_hashnode *node,
++		const cpp_token * token, source_location loc)
++{
++/*
++  fprintf (stderr, "enter_macro %s %s:%d,%d\n",
++	   cpp_token_as_text (pfile, token),
++	   LOCATION_FILE (loc), LOCATION_LINE (loc),
++	   LOCATION_COLUMN (loc));
++
++  const struct line_map *m;
++  for (m = linemap_lookup (line_table, loc);
++       linemap_macro_expansion_map_p (m);
++       loc = linemap_unwind_toward_expansion (line_table, loc, &m))
++    {
++      source_location l =
++	linemap_resolve_location (line_table, loc,
++				  LRK_MACRO_DEFINITION_LOCATION, NULL);
++      fprintf (stderr,
++	       "  enter_macro, linemap_macro_expansion_map_p %s:%d,%d\n",
++	       LOCATION_FILE (l), LOCATION_LINE (l), LOCATION_COLUMN (l));
++    }
++
++  if (! (node->flags & NODE_BUILTIN))
++    {
++      cpp_macro *macro = node->value.macro;
++
++      fprintf (stderr,
++	       "enter_macro_context, macro %s defined at %s:%d,%d\n",
++	       cpp_token_as_text (pfile, token),
++	       LOCATION_FILE (macro->line), LOCATION_LINE (macro->line),
++	       LOCATION_COLUMN (macro->line));
++    }
++*/
++
++  build_gcc_jump_arg arg;
++  arg.type = GCC_JUMP_EXPAND_MACRO;
++  arg.u.expand_macro.token = token;
++  arg.u.expand_macro.loc = loc;
++  arg.u.expand_macro.macro_loc = ! (node->flags & NODE_BUILTIN)
++				 ? node->value.macro->line
++				 : BUILTINS_LOCATION;
++  invoke_plugin_callbacks (PLUGIN_BUILD_GCC_JUMP, &arg);
++}
++
++static void
++cb_stack_file (cpp_reader *, source_location loc, const char *file)
++{
++  build_gcc_jump_arg arg;
++  arg.type = GCC_JUMP_STACK_FILE;
++  arg.u.stack_file.loc = loc;
++  arg.u.stack_file.file = file;
++  invoke_plugin_callbacks (PLUGIN_BUILD_GCC_JUMP, &arg);
++}
++
+ /* Wrapper around cpp_get_token to skip CPP_PADDING tokens
+    and not consume CPP_EOF.  */
+ static const cpp_token *
+diff --git a/gcc/c-family/c.opt b/gcc/c-family/c.opt
+index 88038a0..698aa17 100644
+--- a/gcc/c-family/c.opt
++++ b/gcc/c-family/c.opt
+@@ -1818,4 +1818,8 @@ w
+ C ObjC C++ ObjC++
+ ; Documented in common.opt
+ 
++disable-line-directive
++C ObjC C++ ObjC++ CPP(disable_line_directive) Var(cpp_disable_line_directive) Init(0)
++;
++
+ ; This comment is to ensure we retain the blank line above.
+diff --git a/gcc/c/c-decl.c b/gcc/c/c-decl.c
+index b237e93..d08f445 100644
+--- a/gcc/c/c-decl.c
++++ b/gcc/c/c-decl.c
+@@ -3918,6 +3918,8 @@ pending_xref_error (void)
+ tree
+ lookup_name (tree name)
+ {
++  //printf ("loopup_name: %s\n", IDENTIFIER_POINTER (name));
++
+   struct c_binding *b = I_SYMBOL_BINDING (name);
+   if (b && !b->invisible)
+     {
+@@ -5004,7 +5006,7 @@ finish_decl (tree decl, location_t init_loc, tree init,
+ 	diagnose_uninitialized_cst_member (decl, type);
+     }
+ 
+-	invoke_plugin_callbacks (PLUGIN_FINISH_DECL, decl);
++  invoke_plugin_callbacks (PLUGIN_FINISH_DECL, decl);
+ }
+ 
+ /* Given a parsed parameter declaration, decode it into a PARM_DECL.
+@@ -7149,6 +7151,17 @@ parser_xref_tag (location_t loc, enum tree_code code, tree name)
+      already defined for this tag and return it.  */
+ 
+   ref = lookup_tag (code, name, false, &refloc);
++/*
++  if (ref)
++    fprintf (stderr,
++	     "parser_xref_tag: %s refered to %s:%d,%d, "
++	     "by %s:%d,%d\n",
++	     IDENTIFIER_POINTER (name),
++	     LOCATION_FILE (refloc), LOCATION_LINE (refloc),
++	     LOCATION_COLUMN (refloc),
++	     LOCATION_FILE (loc), LOCATION_LINE (loc),
++	     LOCATION_COLUMN (loc));
++*/
+   /* If this is the right type of tag, return what we found.
+      (This reference will be shadowed by shadow_tag later if appropriate.)
+      If this is the wrong type of tag, do not return it.  If it was the
+@@ -7192,6 +7205,13 @@ parser_xref_tag (location_t loc, enum tree_code code, tree name)
+ 	    }
+ 	}
+ 
++      build_gcc_jump_arg arg;
++      arg.type = GCC_JUMP_REF_TAG;
++      arg.u.ref_tag.name = name;
++      arg.u.ref_tag.loc = loc;
++      arg.u.ref_tag.ref_loc = refloc;
++      invoke_plugin_callbacks (PLUGIN_BUILD_GCC_JUMP, &arg);
++
+       ret.spec = ref;
+       return ret;
+     }
+@@ -7253,6 +7273,18 @@ start_struct (location_t loc, enum tree_code code, tree name,
+ 
+   if (name != NULL_TREE)
+     ref = lookup_tag (code, name, true, &refloc);
++/*
++  if (ref)
++    fprintf (stderr,
++	     "start_struct: %s refered to %s:%d,%d, "
++	     "by %s:%d,%d\n",
++	     IDENTIFIER_POINTER (name),
++	     LOCATION_FILE (refloc), LOCATION_LINE (refloc),
++	     LOCATION_COLUMN (refloc),
++	     LOCATION_FILE (loc), LOCATION_LINE (loc),
++	     LOCATION_COLUMN (loc));
++*/
++
+   if (ref && TREE_CODE (ref) == code)
+     {
+       if (TYPE_SIZE (ref))
+@@ -7278,6 +7310,15 @@ start_struct (location_t loc, enum tree_code code, tree name,
+ 	  /* Don't create structures that contain themselves.  */
+ 	  ref = NULL_TREE;
+ 	}
++      else
++	{
++	  build_gcc_jump_arg arg;
++	  arg.type = GCC_JUMP_REF_START_TAG;
++	  arg.u.ref_tag.name = name;
++	  arg.u.ref_tag.loc = loc;
++	  arg.u.ref_tag.ref_loc = refloc;
++	  invoke_plugin_callbacks (PLUGIN_BUILD_GCC_JUMP, &arg);
++	}
+     }
+ 
+   /* Otherwise create a forward-reference just so the tag is in scope.  */
+@@ -7985,6 +8026,27 @@ start_enum (location_t loc, struct c_enum_contents *the_enum, tree name)
+   if (name != NULL_TREE)
+     enumtype = lookup_tag (ENUMERAL_TYPE, name, true, &enumloc);
+ 
++  if (enumtype && TREE_CODE (enumtype) == ENUMERAL_TYPE)
++    {
++      build_gcc_jump_arg arg;
++      arg.type = GCC_JUMP_REF_START_TAG;
++      arg.u.ref_tag.name = name;
++      arg.u.ref_tag.loc = loc;
++      arg.u.ref_tag.ref_loc = enumloc;
++      invoke_plugin_callbacks (PLUGIN_BUILD_GCC_JUMP, &arg);
++    }
++/*
++  if (enumtype)
++    fprintf (stderr,
++	     "start_enum: %s refered to %s:%d,%d, "
++	     "by %s:%d,%d\n",
++	     IDENTIFIER_POINTER (name),
++	     LOCATION_FILE (enumloc), LOCATION_LINE (enumloc),
++	     LOCATION_COLUMN (enumloc),
++	     LOCATION_FILE (loc), LOCATION_LINE (loc),
++	     LOCATION_COLUMN (loc));
++*/
++
+   if (enumtype == NULL_TREE || TREE_CODE (enumtype) != ENUMERAL_TYPE)
+     {
+       enumtype = make_node (ENUMERAL_TYPE);
+@@ -9177,6 +9239,15 @@ finish_function (void)
+      tree_rest_of_compilation.  */
+   set_cfun (NULL);
+   invoke_plugin_callbacks (PLUGIN_FINISH_PARSE_FUNCTION, current_function_decl);
++// TODO
++#if 0
++  fprintf (stderr, "finish_parse_function %s %s:%d,%d public %d\n",
++	   IDENTIFIER_POINTER (DECL_NAME (current_function_decl)),
++	   DECL_SOURCE_FILE (current_function_decl),
++	   DECL_SOURCE_LINE (current_function_decl),
++	   DECL_SOURCE_COLUMN (current_function_decl),
++	   TREE_PUBLIC (current_function_decl));
++#endif
+   current_function_decl = NULL;
+ }
+ 
+diff --git a/gcc/c/c-parser.c b/gcc/c/c-parser.c
+index c9eb8dd..afec89b 100644
+--- a/gcc/c/c-parser.c
++++ b/gcc/c/c-parser.c
+@@ -272,6 +272,22 @@ c_lex_one_token (c_parser *parser, c_token *token)
+   token->type = c_lex_with_flags (&token->value, &token->location, NULL,
+ 				  (parser->lex_untranslated_string
+ 				   ? C_LEX_STRING_NO_TRANSLATE : 0));
++
++/*
++  source_location w = token->location;
++  const struct line_map *m;
++  for (m = linemap_lookup (line_table, w);
++       linemap_macro_expansion_map_p (m);
++       w = linemap_unwind_toward_expansion (line_table, w, &m))
++    {
++      source_location l =
++	linemap_resolve_location (line_table, w,
++				  LRK_MACRO_DEFINITION_LOCATION, NULL);
++      fprintf (stderr, "  linemap_macro_expansion_map_p %s:%d,%d\n",
++	       LOCATION_FILE (l), LOCATION_LINE (l), LOCATION_COLUMN (l));
++    }
++*/
++
+   token->id_kind = C_ID_NONE;
+   token->keyword = RID_MAX;
+   token->pragma_kind = PRAGMA_NONE;
+@@ -441,6 +457,14 @@ c_lex_one_token (c_parser *parser, c_token *token)
+     default:
+       break;
+     }
++
++  build_gcc_jump_arg arg;
++  arg.type = GCC_JUMP_LEX_TOKEN;
++  arg.u.lex_token.type = token->type;
++  arg.u.lex_token.value = token->value;
++  arg.u.lex_token.loc = token->location;
++  invoke_plugin_callbacks (PLUGIN_BUILD_GCC_JUMP, &arg);
++
+   timevar_pop (TV_LEX);
+ }
+ 
+@@ -2380,6 +2404,7 @@ c_parser_declspecs (c_parser *parser, struct c_declspecs *specs,
+ 	  c_token *name_token = c_parser_peek_token (parser);
+ 	  tree value = name_token->value;
+ 	  c_id_kind kind = name_token->id_kind;
++	  source_location location = name_token->location;
+ 
+ 	  if (kind == C_ID_ADDRSPACE)
+ 	    {
+@@ -2419,6 +2444,26 @@ c_parser_declspecs (c_parser *parser, struct c_declspecs *specs,
+ 	      /* For a typedef name, record the meaning, not the name.
+ 		 In case of 'foo foo, bar;'.  */
+ 	      t.spec = lookup_name (value);
++
++	      if (t.spec && DECL_P (t.spec))
++		{
++		  build_gcc_jump_arg arg;
++		  arg.type = GCC_JUMP_BUILD_REF;
++		  arg.u.build_ref.ref = t.spec;
++		  arg.u.build_ref.loc = location;
++		  invoke_plugin_callbacks (PLUGIN_BUILD_GCC_JUMP, &arg);
++		}
++/*
++	      fprintf (stderr, "build_external_ref %s declared at %s:%d,%d "
++		       "refered by %s:%d,%d\n",
++		       IDENTIFIER_POINTER (DECL_NAME (t.spec)),
++		       DECL_SOURCE_FILE (t.spec),
++		       DECL_SOURCE_LINE (t.spec),
++		       DECL_SOURCE_COLUMN (t.spec),
++		       LOCATION_FILE (name_token->location),
++		       LOCATION_LINE (name_token->location),
++		       LOCATION_COLUMN (name_token->location));
++*/
+ 	    }
+ 	  else
+ 	    {
+@@ -17870,6 +17915,7 @@ c_parser_transaction_cancel (c_parser *parser)
+ void
+ c_parse_file (void)
+ {
++  // fprintf (stderr, "hello\n");
+   /* Use local storage to begin.  If the first token is a pragma, parse it.
+      If it is #pragma GCC pch_preprocess, then this will load a PCH file
+      which will cause garbage collection.  */
+diff --git a/gcc/c/c-typeck.c b/gcc/c/c-typeck.c
+index 2bea816..9d5ab58 100644
+--- a/gcc/c/c-typeck.c
++++ b/gcc/c/c-typeck.c
+@@ -49,6 +49,7 @@ along with GCC; see the file COPYING3.  If not see
+ #include "gomp-constants.h"
+ #include "spellcheck.h"
+ #include "gcc-rich-location.h"
++#include "plugin.h"
+ 
+ /* Possible cases of implicit bad conversions.  Used to select
+    diagnostic messages in convert_for_assignment.  */
+@@ -2682,6 +2683,27 @@ build_external_ref (location_t loc, tree id, int fun, tree *type)
+   /* In Objective-C, an instance variable (ivar) may be preferred to
+      whatever lookup_name() found.  */
+   decl = objc_lookup_ivar (decl, id);
++  if (decl && DECL_P (decl))
++    {
++      build_gcc_jump_arg arg;
++      arg.type = GCC_JUMP_BUILD_REF;
++      arg.u.build_ref.ref = decl;
++      arg.u.build_ref.loc = loc;
++      invoke_plugin_callbacks (PLUGIN_BUILD_GCC_JUMP, &arg);
++/*
++      fprintf (stderr, "build_external_ref %s declared at %s:%d,%d,%p "
++	       "refered by %s:%d,%d,%p\n",
++	       IDENTIFIER_POINTER (DECL_NAME (decl)),
++	       DECL_SOURCE_FILE (decl),
++	       DECL_SOURCE_LINE (decl),
++	       DECL_SOURCE_COLUMN (decl),
++	       expand_location (DECL_SOURCE_LOCATION (decl)).data,
++	       LOCATION_FILE (loc),
++	       LOCATION_LINE (loc),
++	       LOCATION_COLUMN (loc),
++	       expand_location (DECL_SOURCE_LOCATION (decl)).data);
++*/
++    }
+ 
+   *type = NULL;
+   if (decl && decl != error_mark_node)
+diff --git a/gcc/plugin.c b/gcc/plugin.c
+index 60081a5..27e837e 100644
+--- a/gcc/plugin.c
++++ b/gcc/plugin.c
+@@ -450,6 +450,7 @@ register_callback (const char *plugin_name,
+       case PLUGIN_EARLY_GIMPLE_PASSES_END:
+       case PLUGIN_NEW_PASS:
+       case PLUGIN_INCLUDE_FILE:
++      case PLUGIN_BUILD_GCC_JUMP:
+         {
+           struct callback_info *new_callback;
+           if (!callback)
+@@ -530,6 +531,7 @@ invoke_plugin_callbacks_full (int event, void *gcc_data)
+       case PLUGIN_EARLY_GIMPLE_PASSES_END:
+       case PLUGIN_NEW_PASS:
+       case PLUGIN_INCLUDE_FILE:
++      case PLUGIN_BUILD_GCC_JUMP:
+         {
+           /* Iterate over every callback registered with this event and
+              call it.  */
+diff --git a/gcc/plugin.def b/gcc/plugin.def
+index c926d41..a288a4c 100644
+--- a/gcc/plugin.def
++++ b/gcc/plugin.def
+@@ -99,6 +99,8 @@ DEFEVENT (PLUGIN_NEW_PASS)
+    as a const char* pointer.  */
+ DEFEVENT (PLUGIN_INCLUDE_FILE)
+ 
++DEFEVENT (PLUGIN_BUILD_GCC_JUMP)
++
+ /* When adding a new hard-coded plugin event, don't forget to edit in
+    file plugin.c the functions register_callback and
+    invoke_plugin_callbacks_full accordingly!  */
+diff --git a/gcc/toplev.c b/gcc/toplev.c
+index 8979d26..d89d3e4 100644
+--- a/gcc/toplev.c
++++ b/gcc/toplev.c
+@@ -895,6 +895,11 @@ init_asm_output (const char *name)
+ 		     "can%'t open %qs for writing: %m", asm_file_name);
+     }
+ 
++#if 0
++  fprintf (stderr, "asm_file_name %s\n",
++	   asm_file_name ? asm_file_name : "NULL");
++#endif
++
+   if (!flag_syntax_only)
+     {
+       targetm.asm_out.file_start ();
+@@ -1968,6 +1973,11 @@ do_compile ()
+       if (!no_backend)
+ 	backend_init ();
+ 
++#if 0
++      fprintf (stderr, "main_input_filename %s\n",
++	       main_input_filename ? main_input_filename : "NULL");
++#endif
++
+       /* Language-dependent initialization.  Returns true on success.  */
+       if (lang_dependent_init (main_input_filename))
+         {
+diff --git a/libcpp/directives.c b/libcpp/directives.c
+index 1617ff6..566c211 100644
+--- a/libcpp/directives.c
++++ b/libcpp/directives.c
+@@ -964,9 +964,12 @@ do_line (cpp_reader *pfile)
+     }
+ 
+   skip_rest_of_line (pfile);
+-  _cpp_do_file_change (pfile, LC_RENAME_VERBATIM, new_file, new_lineno,
+-		       map_sysp);
+-  line_table->seen_line_directive = true;
++  if (!CPP_OPTION (pfile, disable_line_directive))
++    {
++      _cpp_do_file_change (pfile, LC_RENAME_VERBATIM, new_file,
++			   new_lineno, map_sysp);
++      line_table->seen_line_directive = true;
++    }
+ }
+ 
+ /* Interpret the # 44 "file" [flags] notation, which has slightly
+diff --git a/libcpp/files.c b/libcpp/files.c
+index 5aa8d1a..27b9314 100644
+--- a/libcpp/files.c
++++ b/libcpp/files.c
+@@ -1029,6 +1029,19 @@ _cpp_stack_include (cpp_reader *pfile, const char *fname, int angle_brackets,
+       && type != IT_CMDLINE && type != IT_DEFAULT)
+     pfile->line_table->highest_location--;
+ 
++#if 0
++  fprintf (stderr, "stack_file from %s:%d,%d to %s %s\n",
++	   rich_location (pfile->line_table,
++		 pfile->directive_line).get_expanded_location (0).file,
++	   rich_location (pfile->line_table,
++		 pfile->directive_line).get_expanded_location (0).line,
++	   rich_location (pfile->line_table,
++		 pfile->directive_line).get_expanded_location (0).column,
++	   file->name, file->path);
++#endif
++  if (pfile->cb.stack_file)
++    pfile->cb.stack_file (pfile, pfile->directive_line, file->path);
++
+   stacked = _cpp_stack_file (pfile, file, type == IT_IMPORT);
+ 
+   if (!stacked)
+diff --git a/libcpp/include/cpplib.h b/libcpp/include/cpplib.h
+index 35b0375..e04401c 100644
+--- a/libcpp/include/cpplib.h
++++ b/libcpp/include/cpplib.h
+@@ -193,6 +193,7 @@ struct GTY(()) cpp_string {
+ #define SP_PREV_WHITE	(1 << 9) /* If whitespace before a ##
+ 				    operator, or before this token
+ 				    after a # operator.  */
++#define PASTED		(1 << 10)
+ 
+ /* Specify which field, if any, of the cpp_token union is used.  */
+ 
+@@ -535,6 +536,8 @@ struct cpp_options
+ 
+   /* True enables canonicalization of system header file paths. */
+   bool canonical_system_headers;
++
++  bool disable_line_directive;
+ };
+ 
+ /* Callback for header lookup for HEADER, which is the name of a
+@@ -594,6 +597,9 @@ struct cpp_callbacks
+ 
+   /* Callback that can change a user builtin into normal macro.  */
+   bool (*user_builtin_macro) (cpp_reader *, cpp_hashnode *);
++
++  void (*enter_macro) (cpp_reader *, cpp_hashnode *, const cpp_token *, source_location);
++  void (*stack_file) (cpp_reader *, source_location, const char *);
+ };
+ 
+ #ifdef VMS
+diff --git a/libcpp/macro.c b/libcpp/macro.c
+index c251553..04121d3 100644
+--- a/libcpp/macro.c
++++ b/libcpp/macro.c
+@@ -35,17 +35,20 @@ typedef struct macro_arg macro_arg;
+ struct macro_arg
+ {
+   const cpp_token **first;	/* First token in unexpanded argument.  */
+-  const cpp_token **expanded;	/* Macro-expanded argument.  */
++  const cpp_token **expanded[4];	/* Macro-expanded argument.  */
+   const cpp_token *stringified;	/* Stringified argument.  */
+   unsigned int count;		/* # of tokens in argument.  */
+-  unsigned int expanded_count;	/* # of tokens in expanded argument.  */
++  unsigned int expanded_count[4];	/* # of tokens in expanded argument.  */
+   source_location *virt_locs;	/* Where virtual locations for
+ 				   unexpanded tokens are stored.  */
+-  source_location *expanded_virt_locs; /* Where virtual locations for
+-					  expanded tokens are
+-					  stored.  */
++  source_location *expanded_virt_locs[4]; /* Where virtual locations for
++					     expanded tokens are
++					     stored.  */
+ };
+ 
++#define MACRO_ARG_PASTE_LEFT (1 << 0)
++#define MACRO_ARG_PASTE_RIGHT (1 << 1)
++
+ /* The kind of macro tokens which the instance of
+    macro_arg_token_iter is supposed to iterate over.  */
+ enum macro_arg_token_kind {
+@@ -104,29 +107,30 @@ static _cpp_buff *collect_args (cpp_reader *, const cpp_hashnode *,
+ 				_cpp_buff **, unsigned *);
+ static cpp_context *next_context (cpp_reader *);
+ static const cpp_token *padding_token (cpp_reader *, const cpp_token *);
+-static void expand_arg (cpp_reader *, macro_arg *);
++static void expand_arg (cpp_reader *, macro_arg *, int);
+ static const cpp_token *new_string_token (cpp_reader *, uchar *, unsigned int);
+ static const cpp_token *stringify_arg (cpp_reader *, macro_arg *);
+ static void paste_all_tokens (cpp_reader *, const cpp_token *);
+ static bool paste_tokens (cpp_reader *, source_location,
+ 			  const cpp_token **, const cpp_token *);
+-static void alloc_expanded_arg_mem (cpp_reader *, macro_arg *, size_t);
+-static void ensure_expanded_arg_room (cpp_reader *, macro_arg *, size_t, size_t *);
++static void alloc_expanded_arg_mem (cpp_reader *, macro_arg *, int, size_t);
++static void ensure_expanded_arg_room (cpp_reader *, macro_arg *,
++				      int, size_t, size_t *);
+ static void delete_macro_args (_cpp_buff*, unsigned num_args);
+ static void set_arg_token (macro_arg *, const cpp_token *,
+ 			   source_location, size_t,
+-			   enum macro_arg_token_kind,
+-			   bool);
++			   enum macro_arg_token_kind, int, bool);
+ static const source_location *get_arg_token_location (const macro_arg *,
+-						      enum macro_arg_token_kind);
++						      enum macro_arg_token_kind,
++						      int);
+ static const cpp_token **arg_token_ptr_at (const macro_arg *,
+ 					   size_t,
+ 					   enum macro_arg_token_kind,
+-					   source_location **virt_location);
++					   int, source_location **);
+ 
+ static void macro_arg_token_iter_init (macro_arg_token_iter *, bool,
+ 				       enum macro_arg_token_kind,
+-				       const macro_arg *,
++				       int, const macro_arg *,
+ 				       const cpp_token **);
+ static const cpp_token *macro_arg_token_iter_get_token
+ (const macro_arg_token_iter *it);
+@@ -629,6 +633,7 @@ paste_tokens (cpp_reader *pfile, source_location location,
+   /* Set pfile->cur_token as required by _cpp_lex_direct.  */
+   pfile->cur_token = _cpp_temp_token (pfile);
+   lhs = _cpp_lex_direct (pfile);
++  lhs->flags |= PASTED;
+   if (pfile->buffer->cur != pfile->buffer->rlimit)
+     {
+       source_location saved_loc = lhs->src_loc;
+@@ -947,7 +952,7 @@ collect_args (cpp_reader *pfile, const cpp_hashnode *node,
+ 		continue;
+ 	    }
+ 	  set_arg_token (arg, token, virt_loc,
+-			 ntokens, MACRO_ARG_TOKEN_NORMAL,
++			 ntokens, MACRO_ARG_TOKEN_NORMAL, 0,
+ 			 CPP_OPTION (pfile, track_macro_expansion));
+ 	  ntokens++;
+ 	}
+@@ -958,7 +963,7 @@ collect_args (cpp_reader *pfile, const cpp_hashnode *node,
+ 
+       arg->count = ntokens;
+       set_arg_token (arg, &pfile->eof, pfile->eof.src_loc,
+-		     ntokens, MACRO_ARG_TOKEN_NORMAL,
++		     ntokens, MACRO_ARG_TOKEN_NORMAL, 0,
+ 		     CPP_OPTION (pfile, track_macro_expansion));
+ 
+       /* Terminate the argument.  Excess arguments loop back and
+@@ -1083,6 +1088,15 @@ static int
+ enter_macro_context (cpp_reader *pfile, cpp_hashnode *node,
+ 		     const cpp_token *result, source_location location)
+ {
++/*
++  fprintf (stderr, "enter_macro_context %s %u %s:%d,%d\n",
++    cpp_token_as_text (pfile, result),
++    cpp_token_len (result) / 10,
++    rich_location (pfile->line_table, location).get_expanded_location (0).file,
++    rich_location (pfile->line_table, location).get_expanded_location (0).line,
++    rich_location (pfile->line_table, location).get_expanded_location (0).column);
++*/
++
+   /* The presence of a macro invalidates a file's controlling macro.  */
+   pfile->mi_valid = false;
+ 
+@@ -1114,6 +1128,14 @@ enter_macro_context (cpp_reader *pfile, cpp_hashnode *node,
+       cpp_macro *macro = node->value.macro;
+       _cpp_buff *pragma_buff = NULL;
+ 
++/*
++      fprintf (stderr, "enter_macro_context, macro %s defined at %s:%d,%d\n",
++	cpp_token_as_text (pfile, result),
++	rich_location (pfile->line_table, macro->line).get_expanded_location (0).file,
++	rich_location (pfile->line_table, macro->line).get_expanded_location (0).line,
++	rich_location (pfile->line_table, macro->line).get_expanded_location (0).column);
++*/
++
+       if (macro->fun_like)
+ 	{
+ 	  _cpp_buff *buff;
+@@ -1226,10 +1248,16 @@ enter_macro_context (cpp_reader *pfile, cpp_hashnode *node,
+ 	    }
+ 	  while (pragma_buff != NULL);
+ 	  pfile->about_to_expand_macro_p = false;
++
++	  if (pfile->cb.enter_macro)
++	    pfile->cb.enter_macro(pfile, node, result, location);
+ 	  return 2;
+ 	}
+ 
+       pfile->about_to_expand_macro_p = false;
++
++      if (pfile->cb.enter_macro)
++	pfile->cb.enter_macro(pfile, node, result, location);
+       return 1;
+     }
+ 
+@@ -1258,7 +1286,10 @@ enter_macro_context (cpp_reader *pfile, cpp_hashnode *node,
+ 	expand_loc = pfile->invocation_location;
+       }
+ 
+-    return builtin_macro (pfile, node, loc, expand_loc);
++    int ret = builtin_macro (pfile, node, loc, expand_loc);
++    if (ret != 0 && pfile->cb.enter_macro)
++      pfile->cb.enter_macro(pfile, node, result, location);
++    return ret;
+   }
+ }
+ 
+@@ -1269,7 +1300,7 @@ static void
+ delete_macro_args (_cpp_buff *buff, unsigned num_args)
+ {
+   macro_arg *macro_args;
+-  unsigned i;
++  unsigned i, j;
+ 
+   if (buff == NULL)
+     return;
+@@ -1280,21 +1311,23 @@ delete_macro_args (_cpp_buff *buff, unsigned num_args)
+      as their macro_arg::virt_locs members.  */
+   for (i = 0; i < num_args; ++i)
+     {
+-      if (macro_args[i].expanded)
+-	{
+-	  free (macro_args[i].expanded);
+-	  macro_args[i].expanded = NULL;
+-	}
++      for (j = 0; j < 4; ++j)
++	if (macro_args[i].expanded[j])
++	  {
++	    free (macro_args[i].expanded[j]);
++	    macro_args[i].expanded[j] = NULL;
++	  }
+       if (macro_args[i].virt_locs)
+ 	{
+ 	  free (macro_args[i].virt_locs);
+ 	  macro_args[i].virt_locs = NULL;
+ 	}
+-      if (macro_args[i].expanded_virt_locs)
+-	{
+-	  free (macro_args[i].expanded_virt_locs);
+-	  macro_args[i].expanded_virt_locs = NULL;
+-	}
++      for (j = 0; j < 4; ++j)
++	if (macro_args[i].expanded_virt_locs[j])
++	  {
++	    free (macro_args[i].expanded_virt_locs[j]);
++	    macro_args[i].expanded_virt_locs[j] = NULL;
++	  }
+     }
+   _cpp_free_buff (buff);
+ }
+@@ -1309,14 +1342,14 @@ delete_macro_args (_cpp_buff *buff, unsigned num_args)
+ static void
+ set_arg_token (macro_arg *arg, const cpp_token *token,
+ 	       source_location location, size_t index,
+-	       enum macro_arg_token_kind kind,
++	       enum macro_arg_token_kind kind, int paste_sides,
+ 	       bool track_macro_exp_p)
+ {
+   const cpp_token **token_ptr;
+   source_location *loc = NULL;
+ 
+   token_ptr =
+-    arg_token_ptr_at (arg, index, kind,
++    arg_token_ptr_at (arg, index, kind, paste_sides,
+ 		      track_macro_exp_p ? &loc : NULL);
+   *token_ptr = token;
+ 
+@@ -1336,11 +1369,12 @@ set_arg_token (macro_arg *arg, const cpp_token *token,
+    only when we -ftrack-macro-expansion is on.  */
+ static const source_location *
+ get_arg_token_location (const macro_arg *arg,
+-			enum macro_arg_token_kind kind)
++			enum macro_arg_token_kind kind,
++			int paste_sides)
+ {
+   const source_location *loc = NULL;
+   const cpp_token **token_ptr =
+-    arg_token_ptr_at (arg, 0, kind, (source_location **) &loc);
++    arg_token_ptr_at (arg, 0, kind, paste_sides, (source_location **) &loc);
+ 
+   if (token_ptr == NULL)
+     return NULL;
+@@ -1356,7 +1390,7 @@ get_arg_token_location (const macro_arg *arg,
+    spelling location of the returned token.  */
+ static const cpp_token **
+ arg_token_ptr_at (const macro_arg *arg, size_t index,
+-		  enum macro_arg_token_kind kind,
++		  enum macro_arg_token_kind kind, int paste_sides,
+ 		  source_location **virt_location)
+ {
+   const cpp_token **tokens_ptr = NULL;
+@@ -1370,7 +1404,7 @@ arg_token_ptr_at (const macro_arg *arg, size_t index,
+       tokens_ptr = (const cpp_token **) &arg->stringified;
+       break;
+     case MACRO_ARG_TOKEN_EXPANDED:
+-	tokens_ptr = arg->expanded;
++	tokens_ptr = arg->expanded[paste_sides];
+       break;
+     }
+ 
+@@ -1384,7 +1418,7 @@ arg_token_ptr_at (const macro_arg *arg, size_t index,
+       if (kind == MACRO_ARG_TOKEN_NORMAL)
+ 	*virt_location = &arg->virt_locs[index];
+       else if (kind == MACRO_ARG_TOKEN_EXPANDED)
+-	*virt_location = &arg->expanded_virt_locs[index];
++	*virt_location = &arg->expanded_virt_locs[paste_sides][index];
+       else if (kind == MACRO_ARG_TOKEN_STRINGIFIED)
+ 	*virt_location =
+ 	  (source_location *) &tokens_ptr[index]->src_loc;
+@@ -1400,6 +1434,7 @@ static void
+ macro_arg_token_iter_init (macro_arg_token_iter *iter,
+ 			   bool track_macro_exp_p,
+ 			   enum macro_arg_token_kind kind,
++			   int paste_sides,
+ 			   const macro_arg *arg,
+ 			   const cpp_token **token_ptr)
+ {
+@@ -1411,7 +1446,7 @@ macro_arg_token_iter_init (macro_arg_token_iter *iter,
+      this code has been inlined somewhere.  */
+   iter->location_ptr = NULL;
+   if (track_macro_exp_p)
+-    iter->location_ptr = get_arg_token_location (arg, kind);
++    iter->location_ptr = get_arg_token_location (arg, kind, paste_sides);
+ #if CHECKING_P
+   iter->num_forwards = 0;
+   if (track_macro_exp_p
+@@ -1555,7 +1590,7 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
+      pasting.  */
+ 
+   /* EXP_COUNT is the number of tokens in the macro replacement
+-     list.  TOTAL is the number of tokens /after/ macro parameters
++     list.  total is the number of tokens /after/ macro parameters
+      have been replaced by their arguments.   */
+   exp_count = macro_real_token_count (macro);
+   total = exp_count;
+@@ -1564,15 +1599,15 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
+   for (src = macro->exp.tokens; src < limit; src++)
+     if (src->type == CPP_MACRO_ARG)
+       {
+-	/* Leading and trailing padding tokens.  */
++	/* leading and trailing padding tokens.  */
+ 	total += 2;
+-	/* Account for leading and padding tokens in exp_count too.
+-	   This is going to be important later down this function,
++	/* account for leading and padding tokens in exp_count too.
++	   this is going to be important later down this function,
+ 	   when we want to handle the case of (track_macro_exp <
+ 	   2).  */
+ 	exp_count += 2;
+ 
+-	/* We have an argument.  If it is not being stringified or
++	/* we have an argument.  if it is not being stringified or
+ 	   pasted it is macro-replaced before insertion.  */
+ 	arg = &args[src->val.macro_arg.arg_no - 1];
+ 
+@@ -1581,14 +1616,36 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
+ 	    if (!arg->stringified)
+ 	      arg->stringified = stringify_arg (pfile, arg);
+ 	  }
+-	else if ((src->flags & PASTE_LEFT)
+-		 || (src > macro->exp.tokens && (src[-1].flags & PASTE_LEFT)))
+-	  total += arg->count - 1;
+ 	else
+ 	  {
+-	    if (!arg->expanded)
+-	      expand_arg (pfile, arg);
+-	    total += arg->expanded_count - 1;
++	    int paste_sides = 0;
++
++	    if (src->flags & PASTE_LEFT)
++	      paste_sides |= MACRO_ARG_PASTE_LEFT;
++
++	    if (src > macro->exp.tokens
++		&& (src[-1].flags & PASTE_LEFT))
++	      {
++		if (src->flags & PASTE_LEFT)
++		  paste_sides |= MACRO_ARG_PASTE_RIGHT;
++		else
++		  {
++		    if (src[-1].type == CPP_COMMA
++			&& macro->variadic
++			&& src->val.macro_arg.arg_no == macro->paramc)
++		      {
++			if (!arg->first)
++			  continue;
++		      }
++		    else
++		      paste_sides |= MACRO_ARG_PASTE_RIGHT;
++		  }
++	      }
++
++	    gcc_checking_assert (arg->first);
++
++	    expand_arg(pfile, arg, paste_sides);
++	    total += arg->expanded_count[paste_sides] - 1;
+ 	  }
+       }
+ 
+@@ -1664,7 +1721,6 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
+       unsigned int arg_tokens_count;
+       macro_arg_token_iter from;
+       const cpp_token **paste_flag = NULL;
+-      const cpp_token **tmp_token_ptr;
+ 
+       if (src->type != CPP_MACRO_ARG)
+ 	{
+@@ -1696,66 +1752,55 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
+ 	  macro_arg_token_iter_init (&from,
+ 				     CPP_OPTION (pfile,
+ 						 track_macro_expansion),
+-				     MACRO_ARG_TOKEN_STRINGIFIED,
++				     MACRO_ARG_TOKEN_STRINGIFIED, 0,
+ 				     arg, &arg->stringified);
+ 	}
+-      else if (src->flags & PASTE_LEFT)
+-	{
+-	  arg_tokens_count = arg->count;
+-	  macro_arg_token_iter_init (&from,
+-				     CPP_OPTION (pfile,
+-						 track_macro_expansion),
+-				     MACRO_ARG_TOKEN_NORMAL,
+-				     arg, arg->first);
+-	}
+-      else if (src != macro->exp.tokens && (src[-1].flags & PASTE_LEFT))
++      else
+ 	{
+-	  int num_toks;
+-	  arg_tokens_count = arg->count;
+-	  macro_arg_token_iter_init (&from,
+-				     CPP_OPTION (pfile,
+-						 track_macro_expansion),
+-				     MACRO_ARG_TOKEN_NORMAL,
+-				     arg, arg->first);
++	  int paste_sides = 0;
++	  bool comma_removed = false;
+ 
+-	  num_toks = tokens_buff_count (buff);
++	  if (src->flags & PASTE_LEFT)
++	    paste_sides |= MACRO_ARG_PASTE_LEFT;
+ 
+-	  if (num_toks != 0)
++	  if (src > macro->exp.tokens
++	      && (src[-1].flags & PASTE_LEFT))
+ 	    {
+-	      /* So the current parameter token is pasted to the previous
+-		 token in the replacement list.  Let's look at what
+-		 we have as previous and current arguments.  */
+-
+-	      /* This is the previous argument's token ...  */
+-	      tmp_token_ptr = tokens_buff_last_token_ptr (buff);
+-
+-	      if ((*tmp_token_ptr)->type == CPP_COMMA
+-		  && macro->variadic
+-		  && src->val.macro_arg.arg_no == macro->paramc)
++	      if (src->flags & PASTE_LEFT)
++		paste_sides |= MACRO_ARG_PASTE_RIGHT;
++	      else
+ 		{
+-		  /* ... which is a comma; and the current parameter
+-		     is the last parameter of a variadic function-like
+-		     macro.  If the argument to the current last
+-		     parameter is NULL, then swallow the comma,
+-		     otherwise drop the paste flag.  */
+-		  if (macro_arg_token_iter_get_token (&from) == NULL)
+-		    tokens_buff_remove_last_token (buff);
++		  if (src[-1].type == CPP_COMMA
++		      && macro->variadic
++		      && src->val.macro_arg.arg_no == macro->paramc)
++		    {
++		      gcc_checking_assert (tokens_buff_count (buff));
++		      if (!arg->first)
++			{
++			  gcc_checking_assert (arg->count);
++			  tokens_buff_remove_last_token (buff);
++			  comma_removed = true;
++			}
++		      else
++			paste_flag = tokens_buff_last_token_ptr (buff);
++		    }
+ 		  else
+-		    paste_flag = tmp_token_ptr;
++		    paste_sides |= MACRO_ARG_PASTE_RIGHT;
+ 		}
+-	      /* Remove the paste flag if the RHS is a placemarker.  */
+-	      else if (arg_tokens_count == 0)
+-		paste_flag = tmp_token_ptr;
+ 	    }
+-	}
+-      else
+-	{
+-	  arg_tokens_count = arg->expanded_count;
+-	  macro_arg_token_iter_init (&from,
+-				     CPP_OPTION (pfile,
+-						 track_macro_expansion),
+-				     MACRO_ARG_TOKEN_EXPANDED,
+-				     arg, arg->expanded);
++
++	  if (comma_removed)
++	    arg_tokens_count = 0;
++	  else
++	    {
++	      arg_tokens_count = arg->expanded_count[paste_sides];
++	      macro_arg_token_iter_init (&from,
++					 CPP_OPTION (pfile,
++						     track_macro_expansion),
++					 MACRO_ARG_TOKEN_EXPANDED,
++					 paste_sides, arg,
++					 arg->expanded[paste_sides]);
++	    }
+ 	}
+ 
+       /* Padding on the left of an argument (unless RHS of ##).  */
+@@ -1863,6 +1908,7 @@ replace_args (cpp_reader *pfile, cpp_hashnode *node, cpp_macro *macro,
+ 	    token->flags = (*paste_flag)->flags | PASTE_LEFT;
+ 	  else
+ 	    token->flags = (*paste_flag)->flags & ~PASTE_LEFT;
++	  token->src_loc = (*paste_flag)->src_loc;
+ 	  *paste_flag = token;
+ 	}
+ 
+@@ -2151,14 +2197,16 @@ tokens_buff_add_token (_cpp_buff *buffer,
+    make up ARG itself. That space is allocated in ARG->expanded and
+    needs to be freed using free.  */
+ static void
+-alloc_expanded_arg_mem (cpp_reader *pfile, macro_arg *arg, size_t capacity)
++alloc_expanded_arg_mem (cpp_reader *pfile, macro_arg *arg,
++			int paste_sides, size_t capacity)
+ {
+-  gcc_checking_assert (arg->expanded == NULL
+-		       && arg->expanded_virt_locs == NULL);
++  gcc_checking_assert (arg->expanded[paste_sides] == NULL
++		       && arg->expanded_virt_locs[paste_sides] == NULL);
+ 
+-  arg->expanded = XNEWVEC (const cpp_token *, capacity);
++  arg->expanded[paste_sides] = XNEWVEC (const cpp_token *, capacity);
+   if (CPP_OPTION (pfile, track_macro_expansion))
+-    arg->expanded_virt_locs = XNEWVEC (source_location, capacity);
++    arg->expanded_virt_locs[paste_sides] = XNEWVEC (source_location,
++						    capacity);
+ 
+ }
+ 
+@@ -2166,6 +2214,7 @@ alloc_expanded_arg_mem (cpp_reader *pfile, macro_arg *arg, size_t capacity)
+    tokens.  */
+ static void
+ ensure_expanded_arg_room (cpp_reader *pfile, macro_arg *arg,
++			  int paste_sides,
+ 			  size_t size, size_t *expanded_capacity)
+ {
+   if (size <= *expanded_capacity)
+@@ -2173,18 +2222,20 @@ ensure_expanded_arg_room (cpp_reader *pfile, macro_arg *arg,
+ 
+   size *= 2;
+ 
+-  arg->expanded =
+-    XRESIZEVEC (const cpp_token *, arg->expanded, size);
++  arg->expanded[paste_sides] =
++    XRESIZEVEC (const cpp_token *,
++		arg->expanded[paste_sides], size);
+   *expanded_capacity = size;
+ 
+   if (CPP_OPTION (pfile, track_macro_expansion))
+     {
++      source_location **virt_locs_ptr;
++      virt_locs_ptr = &arg->expanded_virt_locs[paste_sides];
+       if (arg->expanded_virt_locs == NULL)
+-	arg->expanded_virt_locs = XNEWVEC (source_location, size);
++	*virt_locs_ptr = XNEWVEC (source_location, size);
+       else
+-	arg->expanded_virt_locs = XRESIZEVEC (source_location,
+-					      arg->expanded_virt_locs,
+-					      size);
++	*virt_locs_ptr = XRESIZEVEC (source_location,
++				     *virt_locs_ptr, size);
+     }
+ }
+ 
+@@ -2195,14 +2246,15 @@ ensure_expanded_arg_room (cpp_reader *pfile, macro_arg *arg,
+    has terminated the argument's tokens with a CPP_EOF so that we know
+    when we have fully expanded the argument.  */
+ static void
+-expand_arg (cpp_reader *pfile, macro_arg *arg)
++expand_arg (cpp_reader *pfile, macro_arg *arg, int paste_sides)
+ {
+   size_t capacity;
+   bool saved_warn_trad;
+   bool track_macro_exp_p = CPP_OPTION (pfile, track_macro_expansion);
++  const cpp_token *saved_tokens[2] = { NULL, NULL };
+ 
+   if (arg->count == 0
+-      || arg->expanded != NULL)
++      || arg->expanded[paste_sides] != NULL)
+     return;
+ 
+   /* Don't warn about funlike macros when pre-expanding.  */
+@@ -2211,7 +2263,28 @@ expand_arg (cpp_reader *pfile, macro_arg *arg)
+ 
+   /* Loop, reading in the tokens of the argument.  */
+   capacity = 256;
+-  alloc_expanded_arg_mem (pfile, arg, capacity);
++  alloc_expanded_arg_mem (pfile, arg, paste_sides, capacity);
++
++  if (arg->count && (paste_sides & MACRO_ARG_PASTE_LEFT))
++    {
++      saved_tokens[0] = arg->first[arg->count - 1];
++      cpp_token *token = _cpp_temp_token (pfile);
++      token->type = saved_tokens[0]->type;
++      token->val = saved_tokens[0]->val;
++      token->flags = saved_tokens[0]->flags | NO_EXPAND;
++      token->src_loc = saved_tokens[0]->src_loc;
++      arg->first[arg->count - 1] = token;
++    }
++  if (arg->count && (paste_sides & MACRO_ARG_PASTE_RIGHT))
++    {
++      saved_tokens[1] = arg->first[0];
++      cpp_token *token = _cpp_temp_token (pfile);
++      token->type = saved_tokens[1]->type;
++      token->val = saved_tokens[1]->val;
++      token->flags = saved_tokens[1]->flags | NO_EXPAND;
++      token->src_loc = saved_tokens[1]->src_loc;
++      arg->first[0] = token;
++    }
+ 
+   if (track_macro_exp_p)
+     push_extended_tokens_context (pfile, NULL, NULL,
+@@ -2227,7 +2300,8 @@ expand_arg (cpp_reader *pfile, macro_arg *arg)
+       const cpp_token *token;
+       source_location location;
+ 
+-      ensure_expanded_arg_room (pfile, arg, arg->expanded_count + 1,
++      ensure_expanded_arg_room (pfile, arg, paste_sides,
++				arg->expanded_count[paste_sides] + 1,
+ 				&capacity);
+ 
+       token = cpp_get_token_1 (pfile, &location);
+@@ -2236,13 +2310,19 @@ expand_arg (cpp_reader *pfile, macro_arg *arg)
+ 	break;
+ 
+       set_arg_token (arg, token, location,
+-		     arg->expanded_count, MACRO_ARG_TOKEN_EXPANDED,
++		     arg->expanded_count[paste_sides],
++		     MACRO_ARG_TOKEN_EXPANDED, paste_sides,
+ 		     CPP_OPTION (pfile, track_macro_expansion));
+-      arg->expanded_count++;
++      arg->expanded_count[paste_sides]++;
+     }
+ 
+   _cpp_pop_context (pfile);
+ 
++  if (saved_tokens[1])
++    arg->first[0] = saved_tokens[1];
++  if (saved_tokens[0])
++    arg->first[arg->count - 1] = saved_tokens[0];
++
+   CPP_WTRADITIONAL (pfile) = saved_warn_trad;
+ }
+ 

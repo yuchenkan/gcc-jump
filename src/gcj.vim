@@ -1,12 +1,25 @@
-let s:bin = "/home/chenkan/work/gcc-jump/src/gcj"
+let s:bin = $GCJ_BIN
+let s:data = $GCJ_DATA
+let s:db = simplify(s:data . "/db")
+let s:ctx = simplify(s:data . "/ctx")
 "let s:db = "/home/chenkan/work/gcc-jump/test/.test/db"
 "let s:ctx = "/home/chenkan/work/gcc-jump/test/.test/ctx"
 "let s:db = "/home/chenkan/data/gcc-jump/run.binutils-gdb/db"
 "let s:ctx = "/home/chenkan/data/gcc-jump/run.binutils-gdb/ctx"
-let s:db = "/home/chenkan/data/gcc-jump/run.glibc/db"
-let s:ctx = "/home/chenkan/data/gcc-jump/run.glibc/ctx"
+"let s:db = "/home/chenkan/data/gcc-jump/run.glibc/db"
+"let s:ctx = "/home/chenkan/data/gcc-jump/run.glibc/ctx"
 "let s:db = "/home/chenkan/data/gcc-jump/run.linux.uml/db"
 "let s:ctx = "/home/chenkan/data/gcc-jump/run.linux.uml/ctx"
+
+if s:bin == "" || s:data == ""
+
+  function s:Disabled(...)
+    echom "$GCJ_BIN and/or $GCJ_DATA not set. Gcc-jump disabled"
+  endfunction
+
+  command -nargs=* -complete=file GcjObj call s:Disabled(<q-args>)
+  finish
+endif
 
 call system("mkdir -p " . s:ctx)
 
