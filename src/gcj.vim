@@ -332,5 +332,3 @@ endfunction
 command -nargs=* -complete=file GcjObj call s:SetObject(<q-args>)
 nnoremap <leader>j :call <SID>Jump()<CR>
 nnoremap <leader>e :call <SID>Expand()<CR>
-nnoremap <leader>o :call <SID>Older()<CR>
-nnoremap <leader>i :call <SID>Newer()<CR>
