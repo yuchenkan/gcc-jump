@@ -1,5 +1,5 @@
 # gcc-jump
-C code explorer implemented with gcc-plugin, used as vim-plugin. With gcc's help, we can build a very precise jump table with, for example, conditional macros considered. I use this to read source code of glibc, valgrind and linux-kernel (in user mode).
+C code browser implemented with gcc-plugin, used as vim-plugin. With gcc's help, we can build a very precise jump table with, for example, conditional macros considered. I use this to read source code of glibc, valgrind and linux-kernel (in user mode).
 
 ## quick start
 
@@ -65,8 +65,9 @@ automake --add-missing
 ./configure CC=$GCJ_SH
 make
 ```
+`make -j` is not currently supported.
 
-7. explore the code with vim
+7. browse the code with vim
 
 ```sh
 GCJ_BIN=$GCJ_ROOT/gcc-jump/src/gcj GCJ_DATA=$GCJ_ROOT/data vim -c "source $GCJ_ROOT/gcc-jump/src/gcj.vim"
