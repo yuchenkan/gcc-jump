@@ -83,6 +83,7 @@ function s:SetContext(edit, filename, context)
   endif
 
   call system("mkdir -p " . s:ctx . fnamemodify(filename, ":p:h"))
+  " Expension point is required for included file when jumping through macro expansion
   let sctx = a:context.ld . "." . a:context.unit . "." . a:context.include . "." . a:context.point
   let ext = fnamemodify(filename, ":e")
   let link = s:ctx . fnamemodify(filename, ":r") . "." . sctx . "." . ext
@@ -103,6 +104,21 @@ function s:GetContext()
   return { "ld": ctx[0], "unit": ctx[1], "include": ctx[2], "point": ctx[3] }
 endfunction
 
+function s:CurWord()
+  return expand("<cword>")
+endfunction
+
+function s:Mark()
+  if exists("b:gcj_expansion")
+    let exp = b:gcj_expansion
+    let pos = exp.position
+    return [ line("."), col("."), exp.token, pos.line, pos.col, exp.filename ]
+  else
+    return [ line("."), col("."), s:BufName() ]
+  endif
+endfunction
+
+let s:history = [ ]
 function s:Jump()
 
   if !s:HasContext() && !exists("b:gcj_expansion")
@@ -111,6 +127,7 @@ function s:Jump()
   endif
 
   let exptok = 0
+  let tok = s:CurWord()
   if exists("b:gcj_expansion")
     let exp = b:gcj_expansion
     let ctx = exp.context
@@ -123,7 +140,13 @@ function s:Jump()
     let ctx = s:GetContext()
     let pos = { "line": line("."), "col": col(".") }
     let expid = 0
+    " TODO: this is hack, we may get tag info from
+    " the database
+    if getline('.') =~ "^\s*#\s*include.*$"
+      let tok = getline('.')
+    endif
   endif
+  let src = s:Mark()
 
   let sctx = ctx.ld . " " . ctx.unit . " " . ctx.include . " " . ctx.point
   let spos = pos.line . " " . pos.col . " " . expid
@@ -149,6 +172,8 @@ function s:Jump()
     call s:Expand()
     call s:SetExpTok(newpos.expid)
   endif
+  let tgt = s:Mark()
+  call add(s:history, [ tok, src, tgt ])
 
 endfunction
 
@@ -173,6 +198,7 @@ function s:Expand()
     return
   endif
 
+  let filename = s:BufName()
   let ctx = s:GetContext()
   let sctx = ctx.unit . " " . ctx.include . " " . ctx.point
   let spos = line(".") . " " . col(".")
@@ -202,7 +228,9 @@ function s:Expand()
     let w:gcj_exp_win_id = s:exp_win_id
   endif
 
-  let exp = { "context": ctx, "position": pos, "layout": layout, "parent": w:gcj_exp_win_id }
+  let exp = { "filename": filename, "token": s:CurWord(),
+            \ "context": ctx, "position": pos, "layout": layout,
+            \ "parent": w:gcj_exp_win_id }
   call s:GetExpWin()
   setlocal modifiable
   let b:gcj_expansion = exp
@@ -210,6 +238,58 @@ function s:Expand()
   set buftype=nofile
   set syntax=c
   setlocal nomodifiable
+endfunction
+
+function s:Format(mark)
+
+  let m = a:mark
+
+  let pos = m[0] . "," . m[1]
+  if len(m) == 6
+    let from = m[2] . " at " . m[3] . ", " . m[4]
+    let ret = pos . " expanded from " . from
+  else
+    let ret = pos
+  endif
+  return [ ret, " in " . "$GCJ_DATA/ctx" . strpart(m[-1], len(s:ctx)) ]
+
+endfunction
+
+function s:History()
+
+  new
+
+  let toklen = 0
+  let poslen = 0
+  let history = [ ]
+
+  for i in range(len(s:history))
+
+    let [ tok, src, tgt ] = s:history[i]
+    let toklen = max([ toklen, len(tok) ])
+    let src = s:Format(src)
+    let tgt = s:Format(tgt)
+    let poslen = max([ poslen, len(src[0]), len(tgt[0]) ])
+    call add(history, [ tok, src, tgt ])
+  endfor
+
+  let toklen += 1
+  let poslen += 1
+
+  for i in range(len(history))
+    let [ tok, src, tgt ] = history[i]
+    let srcln = tok . repeat(" ", toklen - len(tok)) . "from "
+                \ . src[0] . repeat(" ", poslen - len(src[0])) . src[1]
+    let tgtln = repeat(" ", toklen) . "to   "
+                \ . tgt[0] . repeat(" ", poslen - len(tgt[0])) . tgt[1]
+    call setline(i * 2 + 1, srcln)
+    call setline(i * 2 + 2, tgtln)
+  endfor
+
+endfunction
+
+function s:Clear()
+  let s:history = [ ]
 endfunction
 
 function s:SelectUnit()
@@ -329,6 +409,8 @@ function s:SetObject(...)
 
 endfunction
 
-command -nargs=* -complete=file GcjObj call s:SetObject(<q-args>)
 nnoremap <leader>j :call <SID>Jump()<CR>
 nnoremap <leader>e :call <SID>Expand()<CR>
+nnoremap <leader>r :call <SID>History()<CR>
+command -nargs=0 GcjClear call s:Clear()
+command -nargs=* -complete=file GcjObj call s:SetObject(<q-args>)
