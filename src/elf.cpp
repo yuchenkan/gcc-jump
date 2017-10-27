@@ -48,9 +48,9 @@ struct elf_file
   {
   }
 
-  FILE *fp;
+  FILE* fp;
 
-  elf_vma (*byte_get) (unsigned char *, int);
+  elf_vma (* byte_get) (unsigned char*, int);
 
   elf_internal_ehdr ehdr;
   std::vector<elf_internal_shdr> shdrs;
@@ -68,7 +68,7 @@ namespace elf
 {
 
 elf_vma
-byte_get_little_endian (unsigned char *field, int size)
+byte_get_little_endian (unsigned char* field, int size)
 {
   switch (size)
     {
@@ -170,7 +170,7 @@ byte_get_little_endian (unsigned char *field, int size)
 }
 
 elf_vma
-byte_get_big_endian (unsigned char *field, int size)
+byte_get_big_endian (unsigned char* field, int size)
 {
   switch (size)
     {
@@ -279,8 +279,8 @@ byte_get_big_endian (unsigned char *field, int size)
 }
 
 static std::string
-process_archive (const char * /* name */,
-		 elf_file * /* file */, bool /* thin */)
+process_archive (const char* /* name */,
+		 elf_file* /* file */, bool /* thin */)
 {
   return "not implemented";
 }
@@ -312,15 +312,15 @@ struct elf64_external_shdr {
 };
 
 static std::string
-get_32bit_section_headers (elf_file *file)
+get_32bit_section_headers (elf_file* file)
 {
-  elf32_external_shdr *shdrs;
+  elf32_external_shdr* shdrs;
   if (file->ehdr.e_shentsize != sizeof *shdrs)
     return "invalid section entity size";
 
   unsigned int num = file->ehdr.e_shnum;
   unsigned int size = num * sizeof *shdrs;
-  shdrs = (elf32_external_shdr *) malloc (size);
+  shdrs = (elf32_external_shdr*) malloc (size);
   if (pread (fileno (file->fp), shdrs, size, file->ehdr.e_shoff)
       != (ssize_t) size)
     {
@@ -341,15 +341,15 @@ get_32bit_section_headers (elf_file *file)
 }
 
 static std::string
-get_64bit_section_headers (elf_file *file)
+get_64bit_section_headers (elf_file* file)
 {
-  elf64_external_shdr *shdrs;
+  elf64_external_shdr* shdrs;
   if (file->ehdr.e_shentsize != sizeof *shdrs)
     return "invalid section entity size";
 
   unsigned int num = file->ehdr.e_shnum;
   unsigned int size = num * sizeof *shdrs;
-  shdrs = (elf64_external_shdr *) malloc (size);
+  shdrs = (elf64_external_shdr*) malloc (size);
   if (pread (fileno (file->fp), shdrs, size, file->ehdr.e_shoff) != size)
     {
       free (shdrs);
@@ -403,7 +403,7 @@ struct elf64_external_ehdr {
 };
 
 static std::string
-process_object (elf_file *file)
+process_object (elf_file* file)
 {
   if (fread (file->ehdr.e_ident, EI_NIDENT, 1, file->fp) != 1)
     return "error reading elf file, failed in getting ident";
@@ -470,7 +470,7 @@ process_object (elf_file *file)
 
   file_ptr str_offset = file->shdrs[file->ehdr.e_shstrndx].sh_offset;
   bfd_size_type str_size = file->shdrs[file->ehdr.e_shstrndx].sh_size;
-  char *strtab = (char *) malloc (str_size);
+  char* strtab = (char*) malloc (str_size);
   if (pread (fileno (file->fp), strtab, str_size, str_offset)
       != (ssize_t) str_size)
     {
@@ -483,7 +483,7 @@ process_object (elf_file *file)
 }
 
 static std::string
-read_section (elf_file *file, const char *name, std::string *sec)
+read_section (elf_file* file, const char* name, std::string* sec)
 {
   std::vector<elf_internal_shdr>::iterator it;
   for (it = file->shdrs.begin (); it != file->shdrs.end (); ++it)
@@ -491,7 +491,7 @@ read_section (elf_file *file, const char *name, std::string *sec)
       return "error getting section name";
     else if (strcmp (file->strtab.c_str () + it->sh_name, name) == 0)
       {
-	char *buf = (char *) malloc (it->sh_size);
+	char* buf = (char*) malloc (it->sh_size);
 	bfd_size_type size = it->sh_size;
 	if (pread (fileno (file->fp), buf, size, it->sh_offset)
 	    != (ssize_t) size)
@@ -507,15 +507,15 @@ read_section (elf_file *file, const char *name, std::string *sec)
 }
 
 static int
-get_int (const elf_file *file, const char *buf, int len)
+get_int (const elf_file* file, const char* buf, int len)
 {
-  return file->byte_get ((unsigned char *) buf, len);
+  return file->byte_get ((unsigned char*) buf, len);
 }
 
 }
 
 std::string
-elf_reader::open (const char *name)
+elf_reader::open (const char* name)
 {
   file = new elf_file;
 
@@ -545,13 +545,13 @@ elf_reader::close ()
 }
 
 std::string
-elf_reader::read_section (const char *name, std::string *sec)
+elf_reader::read_section (const char* name, std::string* sec)
 {
   return elf::read_section (file, name, sec);
 }
 
 int
-elf_reader::get_int (const char *buf, int len) const
+elf_reader::get_int (const char* buf, int len) const
 {
   return elf::get_int (file, buf, len);
 }
@@ -566,7 +566,7 @@ is_ok (std::string err)
 }
 
 int
-main (int argc, const char **argv)
+main (int argc, const char** argv)
 {
   elf_reader elf;
   assert (argc == 3);

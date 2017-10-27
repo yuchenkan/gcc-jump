@@ -7,7 +7,7 @@
 #include "elf.hpp"
 
 static bool
-to_int (const char *a, int *i)
+to_int (const char* a, int* i)
 {
   return sscanf (a, "%d", i) == 1;
 }
@@ -22,8 +22,8 @@ usage ()
 typedef std::map<std::string, int> list_elf_result;
 
 static bool
-read_elf (const char *name,
-	  std::set<int> *unit_ids)
+read_elf (const char* name,
+	  std::set<int>* unit_ids)
 {
   elf_reader elf;
   std::string err;
@@ -56,8 +56,8 @@ error_out:
 }
 
 static bool
-list_elf (gcj::set_usr *set, const char *elf,
-	  std::map<std::string, int> *result)
+list_elf (gcj::set_usr* set, const char* elf,
+	  std::map<std::string, int>* result)
 {
   if (elf)
     {
@@ -84,18 +84,18 @@ struct select_unit_result
 };
 
 static std::string
-get_file (const gcj::unit *unit, int include)
+get_file (const gcj::unit* unit, int include)
 {
   int fid = unit->include_map.at (include).locs.front ().fid;
   return unit->file_map.at (fid);
 }
 
 static void
-select_unit (gcj::set_usr *set, int unit,
-	     select_unit_result *result)
+select_unit (gcj::set_usr* set, int unit,
+	     select_unit_result* result)
 {
   result->include = 0;
-  const gcj::unit *u = set->get (unit);
+  const gcj::unit* u = set->get (unit);
   if (! u || u->input_id == 0) return;
 
   result->include = u->input_id;
@@ -104,24 +104,24 @@ select_unit (gcj::set_usr *set, int unit,
 
 struct expand_result
 {
-  const gcj::expansion *expansion;
+  const gcj::expansion* expansion;
   gcj::file_location loc;
 };
 
 static void
-expand (gcj::set_usr *set,
+expand (gcj::set_usr* set,
 	int unit, int include, int point, int line, int col,
-	expand_result *result)
+	expand_result* result)
 {
   result->expansion = NULL;
-  const gcj::unit *u = set->get (unit);
+  const gcj::unit* u = set->get (unit);
   if (! u) return;
 
-  const gcj::context *ctx;
+  const gcj::context* ctx;
   ctx = point == 0
 	? u->get (include) : u->get (include, point);
 
-  const gcj::jump_to *to;
+  const gcj::jump_to* to;
   gcj::file_location begin;
   to = ctx->jump (u, gcj::file_location (line, col), 0, &begin);
   if (! to) return;
@@ -132,18 +132,18 @@ expand (gcj::set_usr *set,
 
 struct jump_result
 {
-  const gcj::jump_to *to;
+  const gcj::jump_to* to;
   std::string file;
 };
 
 static bool
-unit_jump (const gcj::unit *unit, gcj::set_usr *set,
+unit_jump (const gcj::unit* unit, gcj::set_usr* set,
 	   int include, int point, int line, int col, int exp,
-	   jump_result *result)
+	   jump_result* result)
 {
   if (! unit) return false;
 
-  const gcj::context *ctx;
+  const gcj::context* ctx;
   ctx = point == 0
 	? unit->get (include) : unit->get (include, point);
   if (! ctx) return false;
@@ -157,9 +157,9 @@ unit_jump (const gcj::unit *unit, gcj::set_usr *set,
 }
 
 static void
-jump (gcj::set_usr *set,
+jump (gcj::set_usr* set,
       int ld, int unit, int include, int point, int line, int col, int exp,
-      jump_result *result)
+      jump_result* result)
 {
   result->to = NULL;
 
@@ -193,8 +193,8 @@ print_vim_position (int line, int col, int expid)
 }
 
 static int
-command (const char *db, const char *cmd,
-	 int argc, const char *argv[])
+command (const char* db, const char* cmd,
+	 int argc, const char* argv[])
 {
   gcj::set_usr set (db);
   if (strcmp (cmd, "list_elf") == 0)
@@ -338,10 +338,10 @@ command (const char *db, const char *cmd,
 }
 
 int
-main (int argc, const char *argv[])
+main (int argc, const char* argv[])
 {
-  const char *db;
-  const char *cmd;
+  const char* db;
+  const char* cmd;
 
   if (argc < 3)
     return usage ();
@@ -350,7 +350,7 @@ main (int argc, const char *argv[])
   cmd = argv[2];
 
   int cmd_argc = argc - 3;
-  const char **cmd_argv = argv + 3;
+  const char** cmd_argv = argv + 3;
 
   return command (db, cmd, cmd_argc, cmd_argv);
 }

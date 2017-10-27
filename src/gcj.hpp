@@ -9,30 +9,30 @@
 #include <vector>
 #include <list>
 
-std::string escape(const char *str, char c);
+std::string escape(const char* str, char c);
 
 struct logger
 {
-  logger (FILE *fp, bool enabled)
+  logger (FILE* fp, bool enabled)
   : fp (fp), enabled (enabled)
   {
   }
 
   void
-  vtrace (const char *fmt, va_list ap)
+  vtrace (const char* fmt, va_list ap)
   {
     if (enabled)
       vfprintf (fp, fmt, ap);
   }
 
   void
-  vwarning (const char *fmt, va_list ap)
+  vwarning (const char* fmt, va_list ap)
   {
     if (enabled)
       vfprintf (fp, fmt, ap);
   }
 
-  FILE *fp;
+  FILE* fp;
   bool enabled;
 };
 
@@ -40,14 +40,14 @@ namespace gcj
 {
 
 inline void
-save_int32 (FILE *fp, int v)
+save_int32 (FILE* fp, int v)
 {
   int32_t t = v;
   assert (fwrite (&t, sizeof t, 1, fp) == 1);
 }
 
 inline void
-load_int32 (FILE *fp, int *v)
+load_int32 (FILE* fp, int* v)
 {
   int32_t t;
   assert (fread (&t, sizeof t, 1, fp) == 1);
@@ -105,16 +105,16 @@ public:
   }
 
   void
-  save (FILE *fp, void (* sv)(FILE *, const type&)) const
+  save (FILE* fp, void (* sv)(FILE*, const type&)) const
   {
     save_int32 (fp, cur);
-    typename std::vector<const type *>::const_iterator it;
+    typename std::vector<const type*>::const_iterator it;
     for (it = vec.begin (); it != vec.end (); ++ it)
       sv (fp, **it);
   }
 
   void
-  load (FILE *fp, void (* ld)(FILE *, type *))
+  load (FILE* fp, void (* ld)(FILE*, type*))
   {
     assert (cur == 0);
 
@@ -131,7 +131,7 @@ public:
 private:
   int cur;
   std::map<type, int> map;
-  std::vector<const type *> vec;
+  std::vector<const type*> vec;
 };
 
 struct unit;
@@ -275,7 +275,7 @@ struct macro_stack
     return points.size ();
   }
 
-  expansion_point *
+  expansion_point*
   front ()
   {
     return &points.front ();
@@ -439,14 +439,14 @@ struct context
   {
   }
 
-  const context *
+  const context*
   expansion (int point) const
   {
     return expansion_contexts.find (point) == expansion_contexts.end ()
 	   ? NULL : &expansion_contexts.find (point)->second;
   }
 
-  context *
+  context*
   expansion (int include, int point)
   {
     std::pair<std::map<int, context>::iterator, bool> pair;
@@ -469,20 +469,20 @@ struct context
       }
   }
 
-  const jump_to *jump (const unit *, const file_location&, int,
-		       file_location *) const;
+  const jump_to* jump (const unit*, const file_location&, int,
+		       file_location*) const;
 
-  jump_to *
-  jump (const unit *unit, const file_location& loc, int expanded_id)
+  jump_to*
+  jump (const unit* unit, const file_location& loc, int expanded_id)
   {
-    return (jump_to *) ((const context *) this)->jump (unit, loc,
-						       expanded_id,
-						       NULL);
+    return (jump_to*) ((const context*) this)->jump (unit, loc,
+						     expanded_id,
+						     NULL);
   }
 
-  void dump (FILE *, int, const unit *) const;
-  void save (FILE *) const;
-  void load (FILE *);
+  void dump (FILE*, int, const unit*) const;
+  void save (FILE*) const;
+  void load (FILE*);
 
   std::map<jump_from, jump_to> jumps;
   int surrounding;
@@ -539,39 +539,39 @@ struct unit
   {
   }
 
-  unit (logger *log)
+  unit (logger* log)
     : log (log), input_id (0)
   {
   }
 
-  unit (logger *log, const std::string& input)
+  unit (logger* log, const std::string& input)
     : log (log),
       input (input), input_id (0)
   {
   }
 
-  const context *
+  const context*
   get (int include) const
   {
     return contexts.find (include) == contexts.end ()
 	   ? NULL : &contexts.find (include)->second;
   }
 
-  context *
+  context*
   get (int include)
   {
     contexts.insert (std::make_pair (include, context ()));
     return &contexts.find (include)->second;
   }
 
-  const context *
+  const context*
   get (int include, int point) const
   {
     assert (point != 0);
     return get (include) ? get (include)->expansion (point) : NULL;
   }
 
-  context *
+  context*
   get (int include, int point)
   {
     assert (point != 0);
@@ -586,20 +586,20 @@ struct unit
     return id;
   }
 
-  const expansion *
+  const expansion*
   get_expansion (int id) const
   {
     assert (id <= (int) expansions.size ());
     return &expansions.find (id)->second;
   }
 
-  expansion *
+  expansion*
   get_expansion (int id)
   {
-    return (expansion *) ((const unit *) this)->get_expansion (id);
+    return (expansion*) ((const unit*) this)->get_expansion (id);
   }
 
-  int file_id (const char *file);
+  int file_id (const char* file);
 
   int
   include_id (const source_stack& include)
@@ -618,12 +618,12 @@ struct unit
     return point_map.get (point);
   }
 
-  void dump (FILE *, int) const;
-  void save (FILE *) const;
-  void load (FILE *);
+  void dump (FILE*, int) const;
+  void save (FILE*) const;
+  void load (FILE*);
 
   void
-  trace (const char *fmt, ...)
+  trace (const char* fmt, ...)
   {
     va_list ap;
     va_start (ap, fmt);
@@ -632,7 +632,7 @@ struct unit
   }
 
   void
-  warning (const char *fmt, ...)
+  warning (const char* fmt, ...)
   {
     va_list ap;
     va_start (ap, fmt);
@@ -640,7 +640,7 @@ struct unit
     va_end (ap);
   }
 
-  logger *log;
+  logger* log;
   std::string input;
   int input_id;
   std::map<int, context> contexts;
@@ -672,7 +672,7 @@ struct set_data
 
 struct set
 {
-  set (const char *db, int flags)
+  set (const char* db, int flags)
     : log (stderr, flags & SF_TRACE),
       db (db), dump (flags & SF_DUMP), cur_id (0), cur_data (NULL)
   {
@@ -691,13 +691,13 @@ struct set
 
   void next (const std::string& args, const std::string& input);
 
-  unit *
+  unit*
   current ()
   {
     return &cur;
   }
 
-  const unit *
+  const unit*
   current () const
   {
     return &cur;
@@ -712,7 +712,7 @@ struct set
   void save_current_unit ();
 
   void
-  trace (const char *fmt, ...)
+  trace (const char* fmt, ...)
   {
     va_list ap;
     va_start (ap, fmt);
@@ -721,7 +721,7 @@ struct set
   }
 
   void
-  warning (const char *fmt, ...)
+  warning (const char* fmt, ...)
   {
     va_list ap;
     va_start (ap, fmt);
@@ -738,7 +738,7 @@ struct set
   int cur_id;
   unit cur;
 
-  void *cur_data;
+  void* cur_data;
 };
 
 struct set_usr
@@ -749,9 +749,9 @@ struct set_usr
     data.load (db);
   }
 
-  int get_ld (const char *name, const std::set<int>& units);
-  const unit *get (int id);
-  const unit *get (int ld_id, int id);
+  int get_ld (const char* name, const std::set<int>& units);
+  const unit* get (int id);
+  const unit* get (int ld_id, int id);
 
   std::string db;
   set_data data;

@@ -4,7 +4,7 @@ struct elf_file;
 
 struct elf_reader
 {
-  std::string open (const char *name);
+  std::string open (const char* name);
   void close ();
 
   elf_reader ()
@@ -12,8 +12,8 @@ struct elf_reader
   {
   }
 
-  std::string read_section (const char *name, std::string *sec);
-  int get_int (const char *buf, int len) const;
+  std::string read_section (const char* name, std::string* sec);
+  int get_int (const char* buf, int len) const;
 
-  elf_file *file;
+  elf_file* file;
 };

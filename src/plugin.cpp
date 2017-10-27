@@ -39,14 +39,14 @@ build_file_location (source_location l)
 }
 
 static gcj::source_location
-build_source_location (gcj::unit *unit, source_location l)
+build_source_location (gcj::unit* unit, source_location l)
 {
   return gcj::source_location (unit->file_id (LOCATION_FILE (l)),
 			       build_file_location (l));
 }
 
 static gcj::source_location
-build_source_location (gcj::unit *unit, const line_map_ordinary *m)
+build_source_location (gcj::unit* unit, const line_map_ordinary* m)
 {
   return gcj::source_location (unit->file_id (LINEMAP_FILE (m)),
 			       gcj::file_location (LAST_SOURCE_LINE (m),
@@ -54,9 +54,9 @@ build_source_location (gcj::unit *unit, const line_map_ordinary *m)
 }
 
 static void
-cb_start_unit (void *, void *data)
+cb_start_unit (void*, void* data)
 {
-  gcj::set *set = (gcj::set *) data;
+  gcj::set* set = (gcj::set*) data;
 
   int cp = 0;
   std::map<unsigned int, int> priorities;
@@ -91,7 +91,7 @@ cb_start_unit (void *, void *data)
       if (arg_map.find (p) == arg_map.end ())
 	arg_map.insert (std::make_pair (p, std::string ()));
 
-      std::string *a = &arg_map.find (p)->second;
+      std::string* a = &arg_map.find (p)->second;
       for (size_t j = 0;
 	   j < save_decoded_options[i].canonical_option_num_elements;
 	   ++ j)
@@ -106,18 +106,18 @@ cb_start_unit (void *, void *data)
       set->trace ("\n");
     }
 
-  char *full = realpath (input.c_str (), NULL);
+  char* full = realpath (input.c_str (), NULL);
   std::string args = ! full ? input : full;
   std::map<int, std::string>::iterator it;
   for (it = arg_map.begin (); it != arg_map.end (); ++ it)
     args += ' ' + it->second;
 
   set->next (args, input);
-  set->cur_data = (void *) new plug_data;
+  set->cur_data = (void*) new plug_data;
 }
 
 static void
-internal_link (gcj::unit *unit, plug_data *plug)
+internal_link (gcj::unit* unit, plug_data* plug)
 {
   std::map<std::string, std::vector<gcj::jump_src> >::iterator it;
   for (it = plug->srcs.begin (); it != plug->srcs.end (); ++ it)
@@ -132,13 +132,13 @@ internal_link (gcj::unit *unit, plug_data *plug)
     }
 }
 
-static void resolve_tags (gcj::set *set, plug_data *plug);
+static void resolve_tags (gcj::set* set, plug_data* plug);
 
 static void
-cb_finish_unit (void *, void *data)
+cb_finish_unit (void*, void* data)
 {
-  gcj::set *set = (gcj::set *) data;
-  plug_data *plug = (plug_data *) set->cur_data;
+  gcj::set* set = (gcj::set*) data;
+  plug_data* plug = (plug_data*) set->cur_data;
   internal_link (set->current (), plug);
   resolve_tags (set, plug);
   delete plug;
@@ -148,7 +148,7 @@ cb_finish_unit (void *, void *data)
     {
       int unit_id = set->current_id ();
 
-      section *sec;
+      section* sec;
       sec = get_section (".GCJ.plugin",
 			 SECTION_DEBUG
 			 | SECTION_MERGE
@@ -156,7 +156,7 @@ cb_finish_unit (void *, void *data)
 			 NULL);
       switch_to_section (sec);
 
-      const char *op = integer_asm_op (4, 0);
+      const char* op = integer_asm_op (4, 0);
       fputs (op, asm_out_file);
       fprintf (asm_out_file,
 	       HOST_WIDE_INT_PRINT_DEC, (long) unit_id);
@@ -165,15 +165,15 @@ cb_finish_unit (void *, void *data)
 }
 
 static void
-unwind_include (gcj::unit *unit, source_location loc,
-		gcj::source_stack *stack, const char *prefix)
+unwind_include (gcj::unit* unit, source_location loc,
+		gcj::source_stack* stack, const char* prefix)
 {
   assert (loc != UNKNOWN_LOCATION);
 
   int fid = unit->file_id (LOCATION_FILE (loc));
   stack->add (gcj::source_location (fid));
 
-  const line_map_ordinary *m;
+  const line_map_ordinary* m;
   linemap_resolve_location (line_table, loc,
 			    LRK_MACRO_EXPANSION_POINT, &m);
 
@@ -189,14 +189,14 @@ unwind_include (gcj::unit *unit, source_location loc,
 }
 
 static void
-unwind_macro (gcj::unit *unit, source_location loc,
-	      gcj::macro_stack *stack, const char *prefix)
+unwind_macro (gcj::unit* unit, source_location loc,
+	      gcj::macro_stack* stack, const char* prefix)
 {
   if (loc <= BUILTINS_LOCATION)
     return;
 
   source_location w = loc;
-  const line_map *m;
+  const line_map* m;
   for (m = linemap_lookup (line_table, w);
        linemap_macro_expansion_map_p (m);
        w = linemap_unwind_toward_expansion (line_table, w, &m))
@@ -219,8 +219,8 @@ unwind_macro (gcj::unit *unit, source_location loc,
 }
 
 static void
-unwind (gcj::unit *unit, source_location loc,
-	gcj::unwind_stack *stack, const char *prefix)
+unwind (gcj::unit* unit, source_location loc,
+	gcj::unwind_stack* stack, const char* prefix)
 {
   unwind_macro (unit, loc, &stack->macro, prefix);
   unwind_include (unit, loc, &stack->include, prefix);
@@ -246,7 +246,7 @@ spell_real (const_tree value)
 
 #define OP(e, s) s,
 #define TK(e, s) #e,
-static const char *spellings[N_TTYPES] = { TTYPE_TABLE };
+static const char* spellings[N_TTYPES] = { TTYPE_TABLE };
 #undef OP
 #undef TK
 
@@ -275,7 +275,7 @@ spell (cpp_ttype type, const_tree value)
       else if (code == STRING_CST)
 	{
 	  std::string str;
-	  const char *p;
+	  const char* p;
 	  for (p = TREE_STRING_POINTER (value); *p; ++ p)
 	    {
 	      if (*p == '\n') str += "\\n";
@@ -292,11 +292,11 @@ spell (cpp_ttype type, const_tree value)
 }
 
 static void
-lex_token (gcj::set *set,
+lex_token (gcj::set* set,
 	   cpp_ttype type, const_tree value, source_location loc)
 {
-  gcj::unit *unit = set->current ();
-  plug_data *plug = (plug_data *) set->cur_data;
+  gcj::unit* unit = set->current ();
+  plug_data* plug = (plug_data*) set->cur_data;
 
   gcj::unwind_stack stack;
   unwind_macro (unit, loc, &stack.macro, "cpp_token");
@@ -315,8 +315,8 @@ lex_token (gcj::set *set,
 
   unwind_include (unit, loc, &stack.include, "cpp_token");
 
-  gcj::context *ctx = unit->get (unit->include_id (stack.include));
-  gcj::jump_to *to = ctx->jump (unit, build_file_location (loc), 0);
+  gcj::context* ctx = unit->get (unit->include_id (stack.include));
+  gcj::jump_to* to = ctx->jump (unit, build_file_location (loc), 0);
   if (to && to->exp)
     unit->get_expansion (to->exp)->add (token,
 					plug->exp_map.get (loc));
@@ -332,18 +332,18 @@ lex_token (gcj::set *set,
 
 static void
 build_ref_jump_from (source_location loc, int len,
-		     const gcj::set *set,
-		     gcj::context *ctx, const gcj::macro_stack& stack,
-		     gcj::jump_from *from)
+		     const gcj::set* set,
+		     gcj::context* ctx, const gcj::macro_stack& stack,
+		     gcj::jump_from* from)
 {
   gcj::file_location file_loc (build_file_location (loc));
-  const gcj::unit *unit = set->current ();
-  const plug_data *plug = (plug_data *) set->cur_data;
+  const gcj::unit* unit = set->current ();
+  const plug_data* plug = (plug_data*) set->cur_data;
   if (stack.length () == 0)
     *from = gcj::jump_from (file_loc, len);
   else
     {
-      gcj::jump_to *jump_to = ctx->jump (unit, file_loc, 0);
+      gcj::jump_to* jump_to = ctx->jump (unit, file_loc, 0);
       assert (jump_to && jump_to->exp);
       int expid = plug->exp_map.get (loc);
       int id = unit->get_expansion (jump_to->exp)->id (expid);
@@ -353,19 +353,19 @@ build_ref_jump_from (source_location loc, int len,
 
 static void
 build_ref_jump_to (int unit_id, const gcj::unwind_stack& stack,
-		   source_location loc, gcj::set *set,
-		   gcj::jump_to *to)
+		   source_location loc, gcj::set* set,
+		   gcj::jump_to* to)
 {
   gcj::file_location file_loc (build_file_location (loc));
-  gcj::unit *unit = set->current ();
-  const plug_data *plug = (plug_data *) set->cur_data;
+  gcj::unit* unit = set->current ();
+  const plug_data* plug = (plug_data*) set->cur_data;
   int include = unit->include_id (stack.include);
   if (stack.macro.length () == 0)
     *to = gcj::jump_to (unit_id, include, 0, file_loc);
   else
     {
-      const gcj::context *ctx = unit->get (include);
-      const gcj::jump_to *jump_to = ctx->jump (unit, file_loc, 0, NULL);
+      const gcj::context* ctx = unit->get (include);
+      const gcj::jump_to* jump_to = ctx->jump (unit, file_loc, 0, NULL);
       assert (jump_to && jump_to->exp);
       int expid = plug->exp_map.get (loc);
       int id = unit->get_expansion (jump_to->exp)->id (expid);
@@ -374,15 +374,15 @@ build_ref_jump_to (int unit_id, const gcj::unwind_stack& stack,
 }
 
 static void
-build_ref (gcj::set *set, const_tree ref, source_location loc)
+build_ref (gcj::set* set, const_tree ref, source_location loc)
 {
-  gcj::unit *unit = set->current();
+  gcj::unit* unit = set->current();
 
   source_location from_loc = loc;
   source_location to_loc = DECL_SOURCE_LOCATION (ref);
   if (to_loc == UNKNOWN_LOCATION)
     return;
-  const char *name = IDENTIFIER_POINTER (DECL_NAME (ref));
+  const char* name = IDENTIFIER_POINTER (DECL_NAME (ref));
   set->trace ("build_ref %s declared at %s:%d,%d\n",
 	      name,
 	      LOCATION_FILE (to_loc),
@@ -397,7 +397,7 @@ build_ref (gcj::set *set, const_tree ref, source_location loc)
   gcj::unwind_stack from_stack;
   unwind (unit, from_loc, &from_stack, "refer");
 
-  gcj::context *ctx = unit->get (unit->include_id (from_stack.include));
+  gcj::context* ctx = unit->get (unit->include_id (from_stack.include));
   gcj::jump_from jump_from;
   build_ref_jump_from (from_loc, strlen (name), set,
 		       ctx, from_stack.macro, &jump_from);
@@ -413,16 +413,16 @@ build_ref (gcj::set *set, const_tree ref, source_location loc)
 }
 
 static void
-expand_macro (gcj::set *set, const cpp_token *token,
+expand_macro (gcj::set* set, const cpp_token* token,
 	      source_location loc, source_location macro_loc)
 {
-  gcj::unit *unit = set->current ();
+  gcj::unit* unit = set->current ();
 
   source_location from_loc = loc;
   source_location to_loc = macro_loc;
 
   assert (token->type == CPP_NAME);
-  const char *name = (const char *) NODE_NAME (token->val.node.spelling);
+  const char* name = (const char*) NODE_NAME (token->val.node.spelling);
 
   set->trace ("enter_macro %s %s:%d,%d %s:%d,%d\n",
 	      name,
@@ -448,7 +448,7 @@ expand_macro (gcj::set *set, const cpp_token *token,
       return;
     }
 
-  gcj::context *ctx;
+  gcj::context* ctx;
   gcj::expansion_point point (unit->include_id (from_stack.include),
 			      build_source_location (unit, from_loc));
   int eid = unit->point_id (point);
@@ -498,9 +498,9 @@ expand_macro (gcj::set *set, const cpp_token *token,
 }
 
 static void
-stack_file (gcj::set *set, source_location loc, const char *file)
+stack_file (gcj::set* set, source_location loc, const char* file)
 {
-  gcj::unit *unit = set->current ();
+  gcj::unit* unit = set->current ();
 
   set->trace ("stack file from %s:%d,%d to %s\n",
 	      LOCATION_FILE (loc),
@@ -510,7 +510,7 @@ stack_file (gcj::set *set, source_location loc, const char *file)
   gcj::unwind_stack stack;
   unwind (unit, loc, &stack, "stack");
 
-  gcj::context *ctx = unit->get (unit->include_id (stack.include));
+  gcj::context* ctx = unit->get (unit->include_id (stack.include));
   assert (LOCATION_COLUMN (loc) == 0);
   gcj::jump_from jump_from (build_file_location (loc), 0);
 
@@ -528,7 +528,7 @@ stack_file (gcj::set *set, source_location loc, const char *file)
 }
 
 static void
-ref_tag (gcj::set *set, const_tree name,
+ref_tag (gcj::set* set, const_tree name,
 	 source_location loc, source_location ref_loc)
 {
   set->trace ("ref_tag %s refered to %s:%d,%d, by %s:%d,%d",
@@ -538,14 +538,14 @@ ref_tag (gcj::set *set, const_tree name,
 	      LOCATION_FILE (loc), LOCATION_LINE (loc),
 	      LOCATION_COLUMN (loc));
 
-  plug_data *plug = (plug_data *) set->cur_data;
+  plug_data* plug = (plug_data*) set->cur_data;
   assert (plug->tags.insert (std::make_pair (loc, ref_loc)).second);
   assert (plug->tag_refs.insert (
 	std::make_pair (loc, IDENTIFIER_POINTER (name))).second);
 }
 
 static void
-ref_start_tag (gcj::set *set, const_tree name,
+ref_start_tag (gcj::set* set, const_tree name,
 	       source_location loc, source_location ref_loc)
 {
   set->trace ("ref_start_tag %s refered to %s:%d,%d, by %s:%d,%d",
@@ -555,16 +555,16 @@ ref_start_tag (gcj::set *set, const_tree name,
 	      LOCATION_FILE (loc), LOCATION_LINE (loc),
 	      LOCATION_COLUMN (loc));
 
-  plug_data *plug = (plug_data *) set->cur_data;
+  plug_data* plug = (plug_data*) set->cur_data;
   assert (plug->tags.insert (std::make_pair (loc, ref_loc)).second);
   assert (plug->tag_defs.insert (
 	std::make_pair (loc, IDENTIFIER_POINTER (name))).second);
 }
 
 static void
-resolve_tags (gcj::set *set, plug_data *plug)
+resolve_tags (gcj::set* set, plug_data* plug)
 {
-  gcj::unit *unit = set->current ();
+  gcj::unit* unit = set->current ();
 
   std::map<source_location, std::string>::iterator it;
   for (it = plug->tag_defs.begin (); it != plug->tag_defs.end (); ++ it)
@@ -585,7 +585,7 @@ resolve_tags (gcj::set *set, plug_data *plug)
       while (plug->tags.find (kt->second) != plug->tags.end ())
 	kt = plug->tags.find (kt->second);
 
-      const char *name;
+      const char* name;
       if (plug->tag_defs.find (kt->second) != plug->tag_defs.end ())
 	name = plug->tag_defs.find (kt->second)->second.c_str ();
       else
@@ -594,7 +594,7 @@ resolve_tags (gcj::set *set, plug_data *plug)
       // build jump_from from jt->first
       gcj::unwind_stack from_stack;
       unwind (unit, jt->first, &from_stack, "ref_tag_from");
-      gcj::context *ctx = unit->get (unit->include_id (from_stack.include));
+      gcj::context* ctx = unit->get (unit->include_id (from_stack.include));
       gcj::jump_from jump_from;
       build_ref_jump_from (jt->first, strlen (name), set,
 			   ctx, from_stack.macro, &jump_from);
@@ -617,10 +617,10 @@ resolve_tags (gcj::set *set, plug_data *plug)
 }
 
 static void
-cb_build_gcc_jump (void *arg, void *data)
+cb_build_gcc_jump (void* arg, void* data)
 {
-  build_gcc_jump_arg *gcj_arg = (build_gcc_jump_arg *) arg;
-  gcj::set *set = (gcj::set *) data;
+  build_gcc_jump_arg* gcj_arg = (build_gcc_jump_arg*) arg;
+  gcj::set* set = (gcj::set*) data;
   if (gcj_arg->type == GCC_JUMP_LEX_TOKEN)
     lex_token (set,
 	       gcj_arg->u.lex_token.type,
@@ -654,7 +654,7 @@ cb_build_gcc_jump (void *arg, void *data)
 }
 
 static void
-add_jump_src (std::map<std::string, std::vector<gcj::jump_src> > *srcs,
+add_jump_src (std::map<std::string, std::vector<gcj::jump_src> >* srcs,
 	      const std::string& name, int include,
 	      const gcj::jump_from& jump_from)
 {
@@ -664,7 +664,7 @@ add_jump_src (std::map<std::string, std::vector<gcj::jump_src> > *srcs,
 }
 
 static void
-add_jump_tgt (std::map<std::string, gcj::jump_tgt> *tgts,
+add_jump_tgt (std::map<std::string, gcj::jump_tgt>* tgts,
 	      const std::string& name,
 	      const gcj::jump_to& jump_to, bool weak)
 {
@@ -676,15 +676,15 @@ add_jump_tgt (std::map<std::string, gcj::jump_tgt> *tgts,
 }
 
 static void
-add_declaration (gcj::set *set, tree decl)
+add_declaration (gcj::set* set, tree decl)
 {
-  gcj::unit *unit = set->current ();
-  plug_data *plug = (plug_data *) set->cur_data;
+  gcj::unit* unit = set->current ();
+  plug_data* plug = (plug_data*) set->cur_data;
 
   source_location loc = DECL_SOURCE_LOCATION (decl);
   if (loc == UNKNOWN_LOCATION)
     return;
-  const char *name = IDENTIFIER_POINTER (DECL_NAME (decl));
+  const char* name = IDENTIFIER_POINTER (DECL_NAME (decl));
 
   gcj::unwind_stack stack;
   unwind (unit, loc, &stack, "add_decl");
@@ -699,16 +699,16 @@ add_declaration (gcj::set *set, tree decl)
 }
 
 static void
-add_definition (gcj::set *set, tree decl)
+add_definition (gcj::set* set, tree decl)
 {
   int unit_id = set->current_id ();
-  gcj::unit *unit = set->current ();
-  plug_data *plug = (plug_data *) set->cur_data;
+  gcj::unit* unit = set->current ();
+  plug_data* plug = (plug_data*) set->cur_data;
 
   source_location loc = DECL_SOURCE_LOCATION (decl);
   if (loc == UNKNOWN_LOCATION)
     return;
-  const char *name = IDENTIFIER_POINTER (DECL_NAME (decl));
+  const char* name = IDENTIFIER_POINTER (DECL_NAME (decl));
 
   gcj::unwind_stack stack;
   unwind (unit, loc, &stack, "add_decl");
@@ -721,11 +721,11 @@ add_definition (gcj::set *set, tree decl)
 }
 
 static void
-cb_finish_decl (void *arg, void *data)
+cb_finish_decl (void* arg, void* data)
 {
   tree decl = (tree) arg;
-  gcj::set *set = (gcj::set *) data;
-  //gcj::unit *unit = set->current (); TODO
+  gcj::set* set = (gcj::set*) data;
+  //gcj::unit* unit = set->current (); TODO
 
   if (DECL_NAME (decl) != NULL_TREE
       && VAR_OR_FUNCTION_DECL_P (decl)
@@ -746,10 +746,10 @@ cb_finish_decl (void *arg, void *data)
 }
 
 static void
-cb_finish_parse_function (void *arg, void *data)
+cb_finish_parse_function (void* arg, void* data)
 {
   tree func = (tree) arg;
-  gcj::set *set = (gcj::set *) data;
+  gcj::set* set = (gcj::set*) data;
   // XXX Calling here IDENTIFIER_POINTER (DECL_ASSEMBLER_NAME (func))
   // leads to crash on lang_hooks.set_decl_assembler_name
   set->trace ("finish_parse_function %s %s:%d,%d public %d\n",
@@ -760,16 +760,16 @@ cb_finish_parse_function (void *arg, void *data)
 }
 
 static void
-cb_finish (void *, void *data)
+cb_finish (void*, void* data)
 {
-  gcj::set *set = (gcj::set *) data;
+  gcj::set* set = (gcj::set*) data;
   set->trace ("finish\n");
   delete set;
 }
 
 int
-plugin_init (plugin_name_args *plugin_info,
-	     plugin_gcc_version *version)
+plugin_init (plugin_name_args* plugin_info,
+	     plugin_gcc_version* version)
 {
   if (! plugin_default_version_check (version, &gcc_version))
     {
@@ -779,7 +779,7 @@ plugin_init (plugin_name_args *plugin_info,
       return 1;
     }
 
-  const char *db = NULL;
+  const char* db = NULL;
   int flags = 0;
   for (int i = 0; i < plugin_info->argc; ++ i)
     if (strcmp (plugin_info->argv[i].key, "db") == 0)
@@ -795,7 +795,7 @@ plugin_init (plugin_name_args *plugin_info,
       return 1;
     }
 
-  gcj::set *set = new gcj::set (db, flags);
+  gcj::set* set = new gcj::set (db, flags);
 
   set->trace ("hello plugin\n");
   register_callback (plugin_info->base_name,
