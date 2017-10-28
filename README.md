@@ -65,6 +65,7 @@ automake --add-missing
 ./configure CC=$GCJ_SH
 make
 ```
+`make -j` is not currently supported.
 
 7. browse the code with vim
 
