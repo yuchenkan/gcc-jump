@@ -1,9 +1,9 @@
 # gcc-jump
-C code explorer implemented with gcc-plugin, used as vim-plugin. 
+C code explorer implemented with gcc-plugin, used as vim-plugin. With gcc's help, we can build a very precise jump table with, for example, conditional macros considered. I use this to read source code of glibc, valgrind and linux-kernel(in user mode).
 
 ## quick start
 
-Suppose the gcc-jump is checkout at `$GCJ_ROOT/gcc-jump`.
+Suppose the gcc-jump is cloned to `$GCJ_ROOT/gcc-jump`. We are going to build a gcc with our patch and build the plugin to work with the gcc.
 
 1. download gcc source code
 
@@ -19,7 +19,7 @@ cd gcc/
 git checkout gcc-6_3_0-release
 ```
 
-3. patch with gcc/gcc-6_3_0-release.gcc-jump.patch
+3. patch with `gcc-jump/gcc/gcc-6_3_0-release.gcc-jump.patch`
 
 ```sh
 git apply $GCJ_ROOT/gcc-jump/gcc/gcc-6_3_0-release.gcc-jump.patch
@@ -74,7 +74,7 @@ GCJ_BIN=$GCJ_ROOT/gcc-jump/src/gcj GCJ_DATA=$GCJ_ROOT/data vim -c "source $GCJ_R
 ```
 :GcjObj example
 ```
-Use `:GcjObj $binary` to list all source files for the `$binary`.
+Use `:GcjObj $binary` to list all source files for the `$binary`. Cross-file linkage is processed at the first time calling this command, and this can be slow for large binaries. Currently only binaries in elf format is supported.
 
 Use `:GcjObj` to list all source files in the database.
 
