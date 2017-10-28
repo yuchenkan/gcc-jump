@@ -74,7 +74,7 @@ GCJ_BIN=$GCJ_ROOT/gcc-jump/src/gcj GCJ_DATA=$GCJ_ROOT/data vim -c "source $GCJ_R
 ```
 :GcjObj example
 ```
-Use `:GcjObj $binary` to list all source files for the `$binary`. Cross-file linkage is processed at the first time calling this command, and this can be slow for large binaries. Currently only binaries in elf format is supported.
+Use `:GcjObj $binary` to list all source files for the `$binary`. Cross-file linkage is processed at the first time calling this command, and this can be slow for large binaries. Currently only binaries in elf format are supported.
 
 Use `:GcjObj` to list all source files in the database.
 
