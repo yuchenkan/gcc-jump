@@ -704,6 +704,7 @@ set_usr::get_ld (const char* name, const std::set<int>& units)
       std::map<std::string, std::vector<std::pair<int, jump_src> > > srcs;
       std::map<std::string, jump_tgt> tgts;
 
+      // TODO this is really slow
       std::set<int>::const_iterator it;
       for (it = units.begin (); it != units.end (); ++ it)
 	{
@@ -752,6 +753,7 @@ set_usr::get_ld (const char* name, const std::set<int>& units)
 
 	      unit* unit = &ld_units.find (nt->first)->second;
 	      context* ctx = unit->get (nt->second.include);
+              // Cross link the declarations to the definitions
 	      ctx->add (nt->second.from, to);
 	    }
 	}

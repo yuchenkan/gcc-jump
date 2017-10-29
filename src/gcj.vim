@@ -188,6 +188,7 @@ function s:GetExpWin()
   endfor
   execute orig_winnr . " wincmd w"
   below 5new
+  set winfixheight
 endfunction
 
 let s:exp_win_id = 0

@@ -308,7 +308,7 @@ struct jump_from
   }
 
   bool
-  operator< (const jump_from &rhs) const
+  operator< (const jump_from& rhs) const
   {
     return loc < rhs.loc
 	   || (! (rhs.loc < loc)
@@ -406,7 +406,7 @@ struct jump_to
   }
 
   bool
-  operator== (const jump_to &rhs) const
+  operator== (const jump_to& rhs) const
   {
     return unit == rhs.unit
 	   && include == rhs.include && point == rhs.point
@@ -414,14 +414,48 @@ struct jump_to
 	   && exp == rhs.exp;
   }
 
+  bool
+  operator< (const jump_to& rhs) const
+  {
+    if (unit != rhs.unit) return unit < rhs.unit;
+    if (include != rhs.include) return include < rhs.include;
+    if (point != rhs.point) return point < rhs.point;
+    if (loc != rhs.loc) return loc < rhs.loc;
+    if (expanded_id != rhs.expanded_id) return expanded_id < rhs.expanded_id;
+    if (exp != rhs.expanded_id) return expanded_id < rhs.expanded_id;
+  }
+
   int unit;
 
   int include;
+  // The expansion point for included file. Different
+  // expansion point has different result. For example:
+  //   File 1:
+  //   Line 1: #define A B
+  //
+  //   File 2:
+  //   Line 1: #include "File 1"
+  //   Line 2: #define B int
+  //   Line 3: A;
+  //   Line 4: #undef B
+  //   Line 5: #define B void
+  //   Line 6: A;
+  // The token A both in the line 3 and 6 of file 2
+  // jumps to the line 1 of file 1, but their further
+  // jumps for the Token B depand on which line the
+  // token A starts to expand
   int point;
 
   file_location loc;
+  // The token id in expanded macro
   int expanded_id;
 
+  // The expansion id itself. For example:
+  //   Line 1: #define A (1 + 2)
+  //   Line 2: A;
+  // The token A in the line 2 both has its declaration
+  // pointing to the line 1 and the expansion pointing
+  // to the tokens: (, 1, +, 2, )
   int exp;
 };
 
@@ -434,6 +468,7 @@ struct context
 
   context (const context& ctx)
     : jumps (ctx.jumps),
+      backs (ctx.backs),
       surrounding (ctx.surrounding),
       expansion_contexts (ctx.expansion_contexts)
   {
@@ -469,6 +504,14 @@ struct context
       }
   }
 
+  void
+  back (const jump_from& from, const jump_to& to)
+  {
+    if (backs.find (from) == backs.end ())
+      backs.insert (std::make_pair (from, std::set<jump_to>()));
+    backs.find(from)->second.insert(to);
+  }
+
   const jump_to* jump (const unit*, const file_location&, int,
 		       file_location*) const;
 
@@ -484,7 +527,11 @@ struct context
   void save (FILE*) const;
   void load (FILE*);
 
+  // We maintain two direction jumps, forward and backward.
+  // Forward jumps are from references to definitions, and
+  // for a token we only have one definition.
   std::map<jump_from, jump_to> jumps;
+  std::map<jump_from, std::set<jump_to> > backs;
   int surrounding;
 
   std::map<int, context> expansion_contexts;
