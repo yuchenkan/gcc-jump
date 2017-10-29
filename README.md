@@ -81,4 +81,8 @@ Use `:GcjObj` to list all source files in the database.
 
 Press `<Leader>j` on a variable/structure/macro/include to jump to its declaration/definition/source.
 
-Press `<Leader>e` on a macro to expand, you may further jump on the expanded token to its declaration place.
+Press `<Leader>e` on a macro to expand. You may further jump on the expanded token to its declaration place.
+
+Press `<Leader>r` to list the jump history in a new buffer. You may edit and save as reading notes.
+
+Use `:GcjClear` to clear the jump history.
