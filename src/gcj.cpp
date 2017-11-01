@@ -138,6 +138,21 @@ load_expansion_point (FILE* fp, expansion_point* point)
   load_source_location (fp, &point->loc);
 }
 
+void
+add_back (int unit_id, int include, const jump_from& from,
+          unit* to_unit, const jump_to& to)
+{
+  context* ctx = to.point
+		   ? to_unit->get (to.include, to.point)
+		   : to_unit->get (to.include);
+  jump_from back_from (to.expanded_id
+			 ? jump_from (to.loc, 0, to.expanded_id)
+			 : jump_from (to.loc, from.len));
+  jump_to back_to (unit_id, include, to.point,
+		   from.loc, from.expanded_id);
+  ctx->back (back_from, back_to);
+}
+
 const jump_to*
 context::jump (const unit* unit,
 	       const file_location& loc, int expanded_id,
@@ -190,7 +205,7 @@ search_surrounding:
 }
 
 static void
-print_jump_src (FILE* fp, const jump_from& from)
+print_jump_from (FILE* fp, const jump_from& from)
 {
   fprintf (fp, "line,col: %d,%d %s:%d",
 	   from.loc.line, from.loc.col,
@@ -216,35 +231,50 @@ void
 context::dump (FILE* fp, int indet, const unit* unit) const
 {
   iprintf (fp, indet, "jumps:\n");
-  std::map<jump_from, jump_to>::const_iterator jump;
-  for (jump = jumps.begin (); jump != jumps.end (); ++ jump)
+  std::map<jump_from, jump_to>::const_iterator jmp;
+  for (jmp = jumps.begin (); jmp != jumps.end (); ++ jmp)
     {
       iprintf (fp, indet + 1, "");
-      print_jump_src (fp, jump->first);
+      print_jump_from (fp, jmp->first);
 
-      if (jump->second.include)
-	{
-	  fprintf (fp, " => ");
-	  print_jump_to (fp, jump->second);
-	}
+      fprintf (fp, " => ");
+      print_jump_to (fp, jmp->second);
 
       fprintf (fp, "\n");
 
-      if (jump->second.exp)
+      if (jmp->second.exp)
 	{
 	  iprintf (fp, indet + 2, "expanded tokens:");
 
 	  std::vector<expanded_token>::const_iterator tok;
 	  const gcj::expansion* exp;
-	  exp = unit->get_expansion (jump->second.exp);
+	  exp = unit->get_expansion (jmp->second.exp);
 	  for (tok = exp->tokens.begin ();
 	       tok != exp->tokens.end ();
 	       ++ tok)
-	  fprintf (fp, " %d \"%s\"",
-		   tok->id,
-		   escape (tok->token.c_str (), '"').c_str ());
+	    fprintf (fp, " %d \"%s\"",
+		     tok->id,
+		     escape (tok->token.c_str (), '"').c_str ());
 	  fprintf (fp, "\n");
 	}
+    }
+
+  iprintf (fp, indet, "backs:\n");
+  std::map<jump_from, std::set<jump_to> >::const_iterator bak;
+  for (bak = backs.begin (); bak != backs.end (); ++ bak)
+    {
+      iprintf (fp, indet + 1, "");
+      print_jump_from (fp, bak->first);
+      fprintf (fp, "\n");
+
+      std::set<jump_to>::const_iterator bt;
+      for (bt = bak->second.begin (); bt != bak->second.end(); ++ bt)
+	{
+	  iprintf (fp, indet + 2, "");
+	  fprintf (fp, "<= ");
+          print_jump_to (fp, *bt);
+          fprintf (fp, "\n");
+        }
     }
 
   std::map<int, context>::const_iterator ctx;
@@ -307,6 +337,17 @@ context::save (FILE* fp) const
       save_jump_to (fp, jmp->second);
     }
 
+  save_int32 (fp, backs.size ());
+  std::map<jump_from, std::set<jump_to> >::const_iterator bak;
+  for (bak = backs.begin (); bak != backs.end (); ++ bak)
+    {
+      save_jump_from (fp, bak->first);
+      save_int32 (fp, bak->second.size());
+      std::set<jump_to>::const_iterator bt;
+      for (bt = bak->second.begin (); bt != bak->second.end (); ++ bt)
+	save_jump_to (fp, *bt);
+    }
+
   save_int32 (fp, surrounding);
 
   save_int32 (fp, expansion_contexts.size ());
@@ -334,6 +375,26 @@ context::load (FILE* fp)
       load_jump_to (fp, &to);
 
       jumps.insert (std::make_pair (from, to));
+    }
+
+  int bak_size;
+  load_int32 (fp, &bak_size);
+  for (int i = 0; i < bak_size; ++ i)
+    {
+      jump_from from;
+      load_jump_from (fp, &from);
+
+      int bt_size;
+      load_int32 (fp, &bt_size);
+      std::set<jump_to> tos;
+      for (int j = 0; j < bt_size; ++ j)
+	{
+	  jump_to to;
+	  load_jump_to (fp, &to);
+	  tos.insert(to);
+	}
+
+      backs.insert (std::make_pair (from , tos));
     }
 
   load_int32 (fp, &surrounding);
@@ -372,7 +433,7 @@ dump_srcs (FILE* fp, int ident,
       for (jt = it->second.begin (); jt != it->second.end (); ++ jt)
 	{
 	  iprintf (fp, ident + 1, "include: %d, ", jt->include);
-	  print_jump_src (fp, jt->from);
+	  print_jump_from (fp, jt->from);
 	  fprintf (fp, "\n");
 	}
     }
@@ -500,7 +561,7 @@ load_tgts (FILE* fp, std::map<std::string, jump_tgt>* tgts)
 }
 
 static void
-save_int32r (FILE* fp, const int &v)
+save_int32r (FILE* fp, const int& v)
 {
   save_int32 (fp, v);
 }
@@ -748,13 +809,20 @@ set_usr::get_ld (const char* name, const std::set<int>& units)
 	  std::vector<std::pair<int, jump_src> >::iterator nt;
 	  for (nt = mt->second.begin (); nt != mt->second.end (); ++ nt)
 	    {
-	      if (ld_units.find (nt->first) == ld_units.end ())
-		ld_units.insert (std::make_pair (nt->first, unit (NULL)));
+              int unit_id = nt->first;
+	      if (ld_units.find (unit_id) == ld_units.end ())
+		ld_units.insert (std::make_pair (unit_id, unit ()));
 
-	      unit* unit = &ld_units.find (nt->first)->second;
-	      context* ctx = unit->get (nt->second.include);
-              // Cross link the declarations to the definitions
+	      unit* from_unit = &ld_units.find (unit_id)->second;
+	      context* ctx = from_unit->get (nt->second.include);
+	      // Cross link the declarations to the definitions
 	      ctx->add (nt->second.from, to);
+
+              if (ld_units.find (to.unit) == ld_units.end ())
+                ld_units.insert (std::make_pair (unit_id, unit ()));
+
+              add_back (unit_id, nt->second.include, nt->second.from,
+                        &ld_units.find (to.unit)->second, to);
 	    }
 	}
 

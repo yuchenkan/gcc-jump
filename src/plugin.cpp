@@ -117,7 +117,7 @@ cb_start_unit (void*, void* data)
 }
 
 static void
-internal_link (gcj::unit* unit, plug_data* plug)
+internal_link (gcj::unit* unit, int unit_id, plug_data* plug)
 {
   std::map<std::string, std::vector<gcj::jump_src> >::iterator it;
   for (it = plug->srcs.begin (); it != plug->srcs.end (); ++ it)
@@ -128,8 +128,11 @@ internal_link (gcj::unit* unit, plug_data* plug)
       const gcj::jump_to& to = plug->tgts.find (it->first)->second.to;
       std::vector<gcj::jump_src>::iterator jt;
       for (jt = it->second.begin (); jt != it->second.end (); ++ jt)
-        // Link the declarations to the definition
-	unit->get (jt->include)->add (jt->from, to);
+        {
+          // Link the declarations to the definition
+	  unit->get (jt->include)->add (jt->from, to);
+          add_back (unit_id, jt->include, jt->from, unit, to);
+        }
     }
 }
 
@@ -140,7 +143,7 @@ cb_finish_unit (void*, void* data)
 {
   gcj::set* set = (gcj::set*) data;
   plug_data* plug = (plug_data*) set->cur_data;
-  internal_link (set->current (), plug);
+  internal_link (set->current (), set->current_id (), plug);
   resolve_tags (set, plug);
   delete plug;
   set->cur_data = NULL;
@@ -389,7 +392,7 @@ build_ref (gcj::set* set, const_tree ref, source_location loc)
 	      LOCATION_FILE (to_loc),
 	      LOCATION_LINE (to_loc),
 	      LOCATION_COLUMN (to_loc));
-  
+
   set->trace ("refered by %s:%d,%d\n",
 	      LOCATION_FILE (from_loc),
 	      LOCATION_LINE (from_loc),
@@ -398,7 +401,8 @@ build_ref (gcj::set* set, const_tree ref, source_location loc)
   gcj::unwind_stack from_stack;
   unwind (unit, from_loc, &from_stack, "refer");
 
-  gcj::context* ctx = unit->get (unit->include_id (from_stack.include));
+  int include_id = unit->include_id (from_stack.include);
+  gcj::context* ctx = unit->get (include_id);
   gcj::jump_from jump_from;
   build_ref_jump_from (from_loc, strlen (name), set,
 		       ctx, from_stack.macro, &jump_from);
@@ -412,6 +416,8 @@ build_ref (gcj::set* set, const_tree ref, source_location loc)
 
   // Add a jump from the reference to the declaration
   ctx->add (jump_from, jump_to);
+  add_back (set->current_id (), include_id, jump_from,
+            unit, jump_to);
 }
 
 static void
@@ -465,11 +471,12 @@ expand_macro (gcj::set* set, const cpp_token* token,
   //   Line 4: #define E (M(A, 0), M(B, 0))
   //   Line 5: E
   // in which case, from_stack.macro.front() both are t(a)
+  int include_id;
   if (from_stack.macro.length () == 0)
-    ctx = unit->get (unit->include_id (from_stack.include));
+    ctx = unit->get (include_id = unit->include_id (from_stack.include));
   else
     //ctx = unit->get (from_stack.macro.front()->include, eid);
-    ctx = unit->get (unit->include_id (spell_stack.include), eid);
+    ctx = unit->get (include_id = unit->include_id (spell_stack.include), eid);
 
   set->trace ("enter_macro_context, macro %s defined at %s:%d,%d\n",
 	      name,
@@ -499,6 +506,8 @@ expand_macro (gcj::set* set, const cpp_token* token,
   // Add a jump from the macro expansion point to the
   // declaration
   ctx->add (jump_from, jump_to);
+  add_back (set->current_id (), include_id, jump_from,
+            unit, jump_to);
 }
 
 static void
@@ -570,6 +579,7 @@ static void
 resolve_tags (gcj::set* set, plug_data* plug)
 {
   gcj::unit* unit = set->current ();
+  int unit_id = set->current_id ();
 
   std::map<source_location, std::string>::iterator it;
   for (it = plug->tag_defs.begin (); it != plug->tag_defs.end (); ++ it)
@@ -599,7 +609,8 @@ resolve_tags (gcj::set* set, plug_data* plug)
       // build jump_from from jt->first
       gcj::unwind_stack from_stack;
       unwind (unit, jt->first, &from_stack, "ref_tag_from");
-      gcj::context* ctx = unit->get (unit->include_id (from_stack.include));
+      int include_id = unit->include_id (from_stack.include);
+      gcj::context* ctx = unit->get (include_id);
       gcj::jump_from jump_from;
       build_ref_jump_from (jt->first, strlen (name), set,
 			   ctx, from_stack.macro, &jump_from);
@@ -607,7 +618,9 @@ resolve_tags (gcj::set* set, plug_data* plug)
       if (tos.find (kt->second) != tos.end ())
         {
           // Add a jump from the tag's reference to the declaration
-          ctx->add (jump_from, tos.find (kt->second)->second);
+          const gcj::jump_to& jump_to = tos.find (kt->second)->second;
+          ctx->add (jump_from, jump_to);
+          add_back (unit_id, include_id, jump_from, unit, jump_to);
 	  continue;
         }
 
@@ -620,6 +633,7 @@ resolve_tags (gcj::set* set, plug_data* plug)
       // Add a jump from the tag's reference to the declaration
       // with new target
       ctx->add (jump_from, jump_to);
+      add_back (unit_id, include_id, jump_from, unit, jump_to);
       tos.insert (std::make_pair (kt->second, jump_to));
     }
 }

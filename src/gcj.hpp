@@ -9,7 +9,7 @@
 #include <vector>
 #include <list>
 
-std::string escape(const char* str, char c);
+std::string escape(const char*, char);
 
 struct logger
 {
@@ -423,6 +423,7 @@ struct jump_to
     if (loc != rhs.loc) return loc < rhs.loc;
     if (expanded_id != rhs.expanded_id) return expanded_id < rhs.expanded_id;
     if (exp != rhs.expanded_id) return expanded_id < rhs.expanded_id;
+    return false;
   }
 
   int unit;
@@ -458,6 +459,9 @@ struct jump_to
   // to the tokens: (, 1, +, 2, )
   int exp;
 };
+
+void
+add_back (int, int, const jump_from&, unit*, const jump_to&);
 
 struct context
 {
