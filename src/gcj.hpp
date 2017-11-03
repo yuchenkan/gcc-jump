@@ -161,13 +161,13 @@ struct file_location
   }
 
   bool
-  operator!= (const file_location &rhs) const
+  operator!= (const file_location& rhs) const
   {
     return line != rhs.line || col != rhs.col;
   }
 
   bool
-  operator== (const file_location &rhs) const
+  operator== (const file_location& rhs) const
   {
     return line == rhs.line && col == rhs.col;
   }
@@ -229,6 +229,7 @@ struct source_stack
     locs.push_back (loc);
   }
 
+  // Front included from back
   std::vector<source_location> locs;
 };
 
@@ -302,8 +303,9 @@ struct jump_from
   {
   }
 
-  jump_from (const file_location& loc, int, int expanded_id)
-    : loc (loc), len (0), expanded_id (expanded_id)
+  // record len as well to ease add_back
+  jump_from (const file_location& loc, int len, int expanded_id)
+    : loc (loc), len (len), expanded_id (expanded_id)
   {
   }
 
@@ -364,6 +366,8 @@ struct expansion
     return map.get (exp);
   }
 
+  // global id => token id, use global id because I don't want
+  // to deal with source_location parsing
   id_map<int> map;
   std::vector<expanded_token> tokens;
 };
@@ -460,8 +464,8 @@ struct jump_to
   int exp;
 };
 
-void
-add_back (int, int, const jump_from&, unit*, const jump_to&);
+void add_back (int, int, int, const jump_from&, unit*, const jump_to&);
+void add_back2 (const context*, const jump_from&, unit*, const jump_to&);
 
 struct context
 {
@@ -504,7 +508,7 @@ struct context
     else
       {
 	std::map<jump_from, jump_to>::iterator it = jumps.find (from);
-        assert (it->second == to);
+	assert (it->second == to);
       }
   }
 
@@ -526,6 +530,9 @@ struct context
 						     expanded_id,
 						     NULL);
   }
+
+  const std::set<jump_to>* jump_back (const file_location& loc,
+				      int expanded_id) const;
 
   void dump (FILE*, int, const unit*) const;
   void save (FILE*) const;
@@ -559,18 +566,19 @@ struct jump_src
 
 struct jump_tgt
 {
-  jump_tgt (const jump_to& to, bool weak)
-    : to (to), weak (weak)
+  jump_tgt (const jump_to& to, bool weak, bool init)
+    : to (to), weak (weak), init (init)
   {
   }
 
   jump_tgt (const jump_tgt& tgt)
-    : to (tgt.to), weak (tgt.weak)
+    : to (tgt.to), weak (tgt.weak), init (tgt.init)
   {
   }
 
   jump_to to;
   bool weak;
+  bool init;
 };
 
 struct unit
@@ -652,16 +660,7 @@ struct unit
 
   int file_id (const char* file);
 
-  int
-  include_id (const source_stack& include)
-  {
-    int id = include_map.get (include);
-    if (input_id == 0
-	&& include.locs.size () == 1
-	&& include.locs.front ().fid == file_id (input.c_str ()))
-      input_id = id;
-    return id;
-  }
+  int include_id (const source_stack& include);
 
   int
   point_id (const expansion_point& point)
@@ -670,8 +669,8 @@ struct unit
   }
 
   void dump (FILE*, int) const;
-  void save (FILE*) const;
-  void load (FILE*);
+  void save (const std::string& path) const;
+  void load (const std::string& path);
 
   void
   trace (const char* fmt, ...)
@@ -700,6 +699,8 @@ struct unit
   id_map<source_stack> include_map;
   id_map<expansion_point> point_map;
 
+  std::map<int, std::set<int> > file_includes;
+
   std::map<std::string, std::vector<jump_src> > pub_srcs;
   std::map<std::string, jump_tgt> pub_tgts;
 };
@@ -712,8 +713,8 @@ enum set_flag
 
 struct set_data
 {
-  void save (const std::string& db) const;
-  void load (const std::string& db);
+  void save (const std::string& path) const;
+  void load (const std::string& path);
 
   id_map<std::string> unit_map;
   id_map<std::string> ld_map;
@@ -723,22 +724,8 @@ struct set_data
 
 struct set
 {
-  set (const char* db, int flags)
-    : log (stderr, flags & SF_TRACE),
-      db (db), dump (flags & SF_DUMP), cur_id (0), cur_data (NULL)
-  {
-    trace ("load from %s\n", db);
-    data.load (db);
-  }
-
-  ~set ()
-  {
-    if (cur_id)
-      save_current_unit ();
-
-    trace ("save to %s\n", db.c_str ());
-    data.save (db);
-  }
+  set (const char* db, int flags);
+  ~set ();
 
   void next (const std::string& args, const std::string& input);
 
@@ -792,23 +779,63 @@ struct set
   void* cur_data;
 };
 
-struct set_usr
+struct unit_fid
 {
-  set_usr (const std::string& db)
-    : db(db)
+  unit_fid ()
+    : unit (0), fid (0)
   {
-    data.load (db);
   }
 
+  unit_fid (int unit, int fid)
+    : unit (unit), fid (fid)
+  {
+  }
+
+  unit_fid (const unit_fid& ufid)
+    : unit (ufid.unit), fid (ufid.fid)
+  {
+  }
+
+  bool
+  operator< (const unit_fid& rhs) const
+  {
+    return unit < rhs.unit
+	   || (! (rhs.unit < unit) && fid < rhs.fid);
+  }
+
+  int unit;
+  int fid;
+};
+
+struct file_set
+{
+  void save (const std::string&) const;
+  void load (const std::string&);
+
+  id_map<std::string> file_map;
+
+  std::map<unit_fid, int> files;
+  std::map<int, std::set<unit_fid> > file_units;
+};
+
+struct set_usr
+{
+  set_usr (const std::string& db);
+
+  void build_files (int ld);
   int get_ld (const char* name, const std::set<int>& units);
   const unit* get (int id);
-  const unit* get (int ld_id, int id);
+  bool check_ld (int ld);
+  const unit* get (int ld, int id);
+  const file_set* get_file_set (int ld);
 
   std::string db;
   set_data data;
   std::map<int, unit> units;
   // ld_id => unit_id set
   std::map<int, std::map<int, unit> > ld_units;
+  // ld_id => file set
+  std::map<int, file_set> ld_files;
 };
 
 struct unwind_stack

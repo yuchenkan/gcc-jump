@@ -83,11 +83,16 @@ struct select_unit_result
   std::string file;
 };
 
+static int
+get_fid (const gcj::unit* unit, int include)
+{
+  return unit->include_map.at (include).locs.front ().fid;
+}
+
 static std::string
 get_file (const gcj::unit* unit, int include)
 {
-  int fid = unit->include_map.at (include).locs.front ().fid;
-  return unit->file_map.at (fid);
+  return unit->file_map.at (get_fid (unit, include));
 }
 
 static void
@@ -134,6 +139,16 @@ struct jump_result
 {
   const gcj::jump_to* to;
   std::string file;
+
+  jump_result ()
+    : to (NULL)
+  {
+  }
+
+  jump_result (const gcj::jump_to* to, const std::string& file)
+    : to (to), file (file)
+  {
+  }
 };
 
 static bool
@@ -173,6 +188,92 @@ jump (gcj::set_usr* set,
 }
 
 static void
+context_refer (const gcj::context* ctx,
+	       gcj::set_usr* set,
+	       const gcj::file_location& loc, int exp,
+	       std::vector<jump_result>* results)
+{
+  const std::set<gcj::jump_to>* backs;
+  backs = ctx->jump_back (loc, exp);
+  if (! backs) return;
+
+  std::set<gcj::jump_to>::const_iterator it;
+  for (it = backs->begin (); it != backs->end (); ++ it)
+    results->push_back (jump_result (&(*it),
+				     get_file (set->get (it->unit),
+					       it->include)));
+}
+
+static void
+unit_refer (const gcj::unit* unit,
+	    const std::map<int, std::set<int> >* file_includes,
+	    gcj::set_usr* set,
+	    int fid, int line, int col, int exp,
+	    std::vector<jump_result>* results)
+{
+  if (! unit
+      || file_includes->find (fid) == file_includes->end ())
+    return;
+
+  gcj::file_location loc (line, col);
+
+  const std::set<int>* incs = &file_includes->find (fid)->second;
+  std::set<int>::const_iterator it;
+  for (it = incs->begin (); it != incs->end (); ++ it)
+    {
+      const gcj::context* ctx = unit->get (*it);
+      if (! ctx) continue;
+
+      context_refer (ctx, set, loc, exp, results);
+
+      std::map<int, gcj::context>::const_iterator jt;
+      for (jt = ctx->expansion_contexts.begin ();
+	   jt != ctx->expansion_contexts.end ();
+	   ++jt)
+	context_refer (&jt->second, set, loc, exp, results);
+    }
+}
+
+static void
+refer (gcj::set_usr* set,
+       int ld, int unit, int include, int line, int col, int exp,
+       std::vector<jump_result>* results)
+{
+  const gcj::unit* pos_unit = set->get (unit);
+  int pos_fid = get_fid (pos_unit, include);
+
+  gcj::unit_fid ufid (unit, pos_fid);
+
+  std::set<gcj::unit_fid> unit_fids;
+  unit_fids.insert (ufid);
+
+  const gcj::file_set* file_set = set->get_file_set (ld);
+  if (file_set
+      && file_set->files.find (ufid) != file_set->files.end ())
+    {
+      int fid = file_set->files.find (ufid)->second;
+      assert (file_set->file_units.find (fid)
+	      != file_set->file_units.end ()); 
+
+      const std::set<gcj::unit_fid>* ufids;
+      ufids = &file_set->file_units.find (fid)->second;
+      unit_fids.insert (ufids->begin (), ufids->end());
+    }
+
+  std::set<gcj::unit_fid>::iterator it;
+  for (it = unit_fids.begin (); it != unit_fids.end (); ++ it)
+    {
+      const gcj::unit* base = set->get (it->unit);
+      unit_refer (base, &base->file_includes,
+		  set, it->fid, line, col, exp,
+		  results);
+      unit_refer (set->get (ld, it->unit), &base->file_includes,
+		  set, it->fid, line, col, exp,
+		  results);
+    }
+}
+
+static void
 print_vim_context (int unit, int include, int point)
 {
   printf ("{ \"unit\": %d, \"include\": %d, \"point\": %d }",
@@ -192,6 +293,20 @@ print_vim_position (int line, int col, int expid)
 	  line, col, expid);
 }
 
+static void
+print_vim_jump_result (const jump_result& result)
+{
+  printf ("[ \"%s\", ",
+	  escape (result.file.c_str (), '"').c_str ());
+  print_vim_context (result.to->unit, result.to->include,
+		     result.to->point);
+  printf (", ");
+  print_vim_position (result.to->loc.line,
+		      result.to->loc.col,
+		      result.to->expanded_id);
+  printf (" ]");
+}
+
 static int
 command (const char* db, const char* cmd,
 	 int argc, const char* argv[])
@@ -206,22 +321,22 @@ command (const char* db, const char* cmd,
       if (! list_elf (&set, argc == 0 ? NULL : argv[0], &result))
 	return 1;
 
-      int ld_id = 0;
+      int ld = 0;
       if (argc != 0)
 	{
 	  std::set<int> units;
 	  list_elf_result::iterator it;
 	  for (it = result.begin (); it != result.end (); ++ it)
 	    units.insert (it->second);
-	  ld_id = set.get_ld (argv[0], units);
-	  if (ld_id == 0)
+	  ld = set.get_ld (argv[0], units);
+	  if (ld == 0)
 	    {
 	      fprintf (stderr, "file not found %s\n", argv[0]);
 	      return 1;
 	    }
 	}
 
-      printf ("[ %d, [ ", ld_id);
+      printf ("[ %d, [ ", ld);
       list_elf_result::iterator it;
       for (it = result.begin (); it != result.end (); ++ it)
 	{
@@ -318,18 +433,41 @@ command (const char* db, const char* cmd,
 		   result.to->expanded_id,
 		   result.file.c_str ());
 
-	  printf ("[ \"%s\", ",
-		  escape (result.file.c_str (), '"').c_str ());
-	  print_vim_context (result.to->unit, result.to->include,
-			     result.to->point);
-	  printf (", ");
-	  print_vim_position (result.to->loc.line,
-			      result.to->loc.col,
-			      result.to->expanded_id);
-	  printf (" ]");
+	  print_vim_jump_result (result);
 	}
       else
 	fprintf (stderr, "none\n");
+
+      return 0;
+    }
+  else if (strcmp (cmd, "refer") == 0)
+    {
+      int ld, unit, include, line, col, exp;
+      if (argc != 6
+	  || ! to_int (argv[0], &ld)
+	  || ! to_int (argv[1], &unit)
+	  || ! to_int (argv[2], &include)
+	  || ! to_int (argv[3], &line)
+	  || ! to_int (argv[4], &col)
+	  || ! to_int (argv[5], &exp))
+	return usage ();
+
+      std::vector<jump_result> results;
+      refer (&set, ld, unit, include, line, col, exp, &results);
+      std::vector<jump_result>::iterator it;
+      printf ("[ ");
+      for (it = results.begin (); it != results.end (); ++ it)
+	{
+	  fprintf (stderr, "refered by: %d %d %d %d %d %s\n",
+		   it->to->include, it->to->point,
+		   it->to->loc.line, it->to->loc.col,
+		   it->to->expanded_id,
+		   it->file.c_str ());
+
+	  if (it != results.begin ()) printf (", ");
+	  print_vim_jump_result (*it);
+	}
+      printf (" ]");
 
       return 0;
     }

@@ -22,6 +22,7 @@ if s:bin == "" || s:data == ""
 endif
 
 call system("mkdir -p " . s:ctx)
+call system("mkdir -p " . simplify(s:db . "/files"))
 
 function s:Gcj(command)
   let cmd = s:bin . " " . s:db . " " . a:command
@@ -75,6 +76,13 @@ function s:BufName()
   return expand("%:p")
 endfunction
 
+function s:ExpandFileName(filename, context)
+  " Expension point is required for included file when jumping through macro expansion
+  let sctx = a:context.ld . "." . a:context.unit . "." . a:context.include . "." . a:context.point
+  let ext = fnamemodify(a:filename, ":e")
+  return fnamemodify(a:filename, ":r") . "." . sctx . "." . ext
+endfunction
+
 function s:SetContext(edit, filename, context)
 
   let filename = a:filename
@@ -83,10 +91,7 @@ function s:SetContext(edit, filename, context)
   endif
 
   call system("mkdir -p " . s:ctx . fnamemodify(filename, ":p:h"))
-  " Expension point is required for included file when jumping through macro expansion
-  let sctx = a:context.ld . "." . a:context.unit . "." . a:context.include . "." . a:context.point
-  let ext = fnamemodify(filename, ":e")
-  let link = s:ctx . fnamemodify(filename, ":r") . "." . sctx . "." . ext
+  let link = s:ctx . s:ExpandFileName(filename, a:context)
   " Using cp instead of a real link because vim can't handle well with the different
   " file names pointing to the same inode
   call system("rm -f " . link)
@@ -119,6 +124,32 @@ function s:Mark()
 endfunction
 
 let s:history = [ ]
+function s:Move(jmp, tok, ld, to)
+
+  let src = s:Mark()
+
+  let [ filename, context, newpos ] = a:to
+  let context.ld = a:ld
+  if exists("b:gcj_expansion")
+    let exp = b:gcj_expansion
+    let winnr = s:FindWin("gcj_exp_win_id", exp.parent)
+    if winnr != -1
+      execute winnr . "wincmd w"
+    endif
+  endif
+
+  call s:SetContext("edit", filename, context)
+  call cursor(newpos.line, newpos.col)
+
+  if newpos.expid != 0
+    call s:Expand()
+    call s:SetExpTok(newpos.expid)
+  endif
+  let tgt = s:Mark()
+  call add(s:history, [ a:jmp, a:tok, src, tgt ])
+
+endfunction
+
 function s:Jump()
 
   if !s:HasContext() && !exists("b:gcj_expansion")
@@ -126,7 +157,6 @@ function s:Jump()
     return
   endif
 
-  let exptok = 0
   let tok = s:CurWord()
   if exists("b:gcj_expansion")
     let exp = b:gcj_expansion
@@ -146,7 +176,6 @@ function s:Jump()
       let tok = getline('.')
     endif
   endif
-  let src = s:Mark()
 
   let sctx = ctx.ld . " " . ctx.unit . " " . ctx.include . " " . ctx.point
   let spos = pos.line . " " . pos.col . " " . expid
@@ -156,25 +185,18 @@ function s:Jump()
     return
   endif
 
-  let [ filename, context, newpos ] = eval(sjmp)
-  let context.ld = ctx.ld
-  if exists("exp")
-    let winnr = s:FindWin("gcj_exp_win_id", exp.parent)
-    if winnr != -1
-      execute winnr . "wincmd w"
+  call s:Move("jump", tok, ctx.ld, eval(sjmp))
+
+endfunction
+
+function s:ExpMove()
+  let id = b:gcj_expansion.parent
+  for winnr in range(1, winnr("$"))
+    execute winnr . " wincmd w"
+    if exists("w:gcj_exp_win_id") && w:gcj_exp_win_id == id
+      return
     endif
-  endif
-
-  call s:SetContext("edit", filename, context)
-  call cursor(newpos.line, newpos.col)
-
-  if newpos.expid != 0
-    call s:Expand()
-    call s:SetExpTok(newpos.expid)
-  endif
-  let tgt = s:Mark()
-  call add(s:history, [ tok, src, tgt ])
-
+  endfor
 endfunction
 
 function s:GetExpWin()
@@ -189,6 +211,8 @@ function s:GetExpWin()
   execute orig_winnr . " wincmd w"
   below 5new
   set winfixheight
+  nnoremap <buffer> <C-o> :call <SID>ExpMove()<CR>
+  nnoremap <buffer> <C-i> :call <SID>ExpMove()<CR>
 endfunction
 
 let s:exp_win_id = 0
@@ -256,6 +280,64 @@ function s:Format(mark)
 
 endfunction
 
+function s:ReadLine(fn, ln)
+  return readfile(a:fn, "", a:ln)[a:ln - 1]
+endfunction
+
+function s:Back()
+
+  if !s:HasContext() && !exists("b:gcj_expansion")
+    echom "Not in gcj context"
+    return
+  endif
+
+  let tok = s:CurWord()
+  if exists("b:gcj_expansion")
+    let exp = b:gcj_expansion
+    let ctx = exp.context
+    let pos = exp.position
+    let expid = s:GetExpTok()
+    if expid == 0
+      return
+    endif
+  else
+    let ctx = s:GetContext()
+    let pos = { "line": line("."), "col": col(".") }
+    let expid = 0
+  endif
+
+  let sctx = ctx.ld . " " . ctx.unit . " " . ctx.include
+  let spos = pos.line . " " . pos.col . " " . expid
+  let sbak = s:Gcj("refer " . sctx . " " . spos)
+
+  let baks = eval(sbak)
+
+  if len(baks) == 0
+    return
+  endif
+
+  if len(baks) == 1
+    let choice = 0
+  else
+    let bklist = [ "Refered by:" ]
+    for i in range(len(baks))
+      let [ filename, newctx, newpos ] = baks[i]
+      let newctx.ld = ctx.ld
+      let snewpos = newpos.line . "," . newpos.col
+      if newpos.expid != 0
+        let snewpos = snewpos . "," . newpos.expid
+      endif
+      let line = s:ReadLine(filename, newpos.line)
+      call add(bklist, i . ". " . s:ExpandFileName(filename, newctx) . ":\t" . snewpos . "\t" . line)
+    endfor
+
+    let choice = inputlist(bklist)
+  endif
+
+  call s:Move("back", tok, ctx.ld, baks[choice])
+
+endfunction
+
 function s:History()
 
   new
@@ -266,20 +348,20 @@ function s:History()
 
   for i in range(len(s:history))
 
-    let [ tok, src, tgt ] = s:history[i]
+    let [ jmp, tok, src, tgt ] = s:history[i]
     let toklen = max([ toklen, len(tok) ])
     let src = s:Format(src)
     let tgt = s:Format(tgt)
     let poslen = max([ poslen, len(src[0]), len(tgt[0]) ])
-    call add(history, [ tok, src, tgt ])
+    call add(history, [ jmp, tok, src, tgt ])
   endfor
 
   let toklen += 1
   let poslen += 1
 
   for i in range(len(history))
-    let [ tok, src, tgt ] = history[i]
-    let srcln = tok . repeat(" ", toklen - len(tok)) . "from "
+    let [ jmp, tok, src, tgt ] = history[i]
+    let srcln = tok . repeat(" ", toklen - len(tok)) . jmp . " "
                 \ . src[0] . repeat(" ", poslen - len(src[0])) . src[1]
     let tgtln = repeat(" ", toklen) . "to   "
                 \ . tgt[0] . repeat(" ", poslen - len(tgt[0])) . tgt[1]
@@ -412,6 +494,7 @@ endfunction
 
 nnoremap <leader>j :call <SID>Jump()<CR>
 nnoremap <leader>e :call <SID>Expand()<CR>
+nnoremap <leader>b :call <SID>Back()<CR>
 nnoremap <leader>r :call <SID>History()<CR>
 command -nargs=0 GcjClear call s:Clear()
 command -nargs=* -complete=file GcjObj call s:SetObject(<q-args>)

@@ -1,6 +1,8 @@
 # gcc-jump
 C code browser implemented with gcc-plugin, used as vim-plugin. With gcc's help, we can build a very precise jump table with, for example, conditional macros considered. I use this to read source code of glibc, valgrind and linux-kernel (in user mode).
 
+![demo](test/demo/demo.gif)
+
 ## quick start
 
 Suppose the gcc-jump is cloned to `$GCJ_ROOT/gcc-jump`. We are going to build a gcc with our patch and build the plugin to work with the gcc.
@@ -46,8 +48,8 @@ INSTALLDIR=$GCJ_ROOT/gcc-local make
 
 ```sh
 GCJ_PLUGIN=$GCJ_ROOT/gcc-jump/src/gcj.so
-GCJ_DATA=$GCJ_ROOT/data
-GCJ_SH=$GCJ_ROOT/gcc-jump/test/gcj.sh
+GCJ_DATA=$GCJ_ROOT/data/demo/
+GCJ_SH=$GCJ_ROOT/gcc-jump/test/demo/gcj.sh
 cat <<EOF >$GCJ_SH
 #!/bin/bash
 
@@ -58,7 +60,7 @@ $GCJ_ROOT/gcc-local/bin/gcc -disable-line-directive -fplugin=$GCJ_PLUGIN -fplugi
 EOF
 chmod a+x $GCJ_SH
 
-cd $GCJ_ROOT/gcc-jump/test/
+cd $GCJ_ROOT/gcc-jump/test/demo/
 aclocal
 autoconf
 automake --add-missing
@@ -70,7 +72,7 @@ make
 7. browse the code with vim
 
 ```sh
-GCJ_BIN=$GCJ_ROOT/gcc-jump/src/gcj GCJ_DATA=$GCJ_ROOT/data vim -c "source $GCJ_ROOT/gcc-jump/src/gcj.vim"
+GCJ_BIN=$GCJ_ROOT/gcc-jump/src/gcj GCJ_DATA=$GCJ_ROOT/data/demo vim -c "source $GCJ_ROOT/gcc-jump/src/gcj.vim"
 ```
 ```
 :GcjObj example
@@ -80,6 +82,8 @@ Use `:GcjObj $binary` to list all source files for the `$binary`. Cross-file lin
 Use `:GcjObj` to list all source files in the database.
 
 Press `<Leader>j` on a variable/structure/macro/include to jump to its declaration/definition/source.
+
+Press `<Leader>b` on a declaration/definition to jump back to it's referrers.
 
 Press `<Leader>e` on a macro to expand. You may further jump on the expanded token to its declaration place.
 
