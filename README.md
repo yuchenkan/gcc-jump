@@ -86,3 +86,5 @@ Press `<Leader>e` on a macro to expand. You may further jump on the expanded tok
 Press `<Leader>r` to list the jump history in a new buffer. You may edit and save as reading notes.
 
 Use `:GcjClear` to clear the jump history.
+
+![demo](test/demo.gif)
