@@ -1,6 +1,8 @@
 # gcc-jump
 C code browser implemented with gcc-plugin, used as vim-plugin. With gcc's help, we can build a very precise jump table with, for example, conditional macros considered. I use this to read source code of glibc, valgrind and linux-kernel (in user mode).
 
+![demo](test/demo.gif)
+
 ## quick start
 
 Suppose the gcc-jump is cloned to `$GCJ_ROOT/gcc-jump`. We are going to build a gcc with our patch and build the plugin to work with the gcc.
@@ -86,5 +88,3 @@ Press `<Leader>e` on a macro to expand. You may further jump on the expanded tok
 Press `<Leader>r` to list the jump history in a new buffer. You may edit and save as reading notes.
 
 Use `:GcjClear` to clear the jump history.
-
-![demo](test/demo.gif)
