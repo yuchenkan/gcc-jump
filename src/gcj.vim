@@ -403,9 +403,9 @@ function s:SelectUnit()
 
     execute winnr . "wincmd w"
     if !exists("b:gcj_units")
-       && !exists("w:gcj_obj_win_id")
-       && !exists("w:gcj_exp_win_id")
-       && !exists("b::gcj_expansion") && (&mod == 0 || bufwinnr(bufnr) != winnr)
+       \ && !exists("w:gcj_obj_win_id")
+       \ && !exists("w:gcj_exp_win_id")
+       \ && !exists("b::gcj_expansion") && (&mod == 0 || bufwinnr(bufnr) != winnr)
       call s:SetContext("edit", filename, context)
       return
     endif
