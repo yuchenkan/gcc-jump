@@ -426,8 +426,8 @@ function s:SelectUnit()
   endfor
 
   execute maxnr . "wincmd w"
-  let height = max([ 0, winheight(0) - 5 ])
-  call s:SetContext("below " . height . "split", filename, ld, context)
+  let height = max([ 0, winheight(0) - 7 ]) " TODO fix layout
+  call s:SetContext("below " . height . "split", filename, context)
 
 endfunction
 
